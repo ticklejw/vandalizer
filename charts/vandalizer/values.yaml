@@ -432,8 +432,12 @@ httpRoute:
 # ServiceMonitor is enabled).
 networkPolicy:
   enabled: true
-  # Namespaces allowed to reach the frontend (and api, for split routing),
-  # e.g. {kubernetes.io/metadata.name: gateway-system}. Empty selects all.
+  # By default only this release's frontend pods may reach the api. Add
+  # namespace labels here to also admit traffic from other namespaces —
+  # needed for split-edge routing (a Gateway sending /api straight to the api
+  # Service) or Prometheus scraping /api/metrics, e.g.
+  # {kubernetes.io/metadata.name: gateway-system}. The frontend itself is
+  # left unrestricted (no policy selects it) so any edge can reach it.
   ingressNamespaceSelector: {}
 
 serviceAccount:
