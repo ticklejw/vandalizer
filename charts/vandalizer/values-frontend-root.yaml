@@ -9,6 +9,9 @@ frontend:
   containerPort: 80
   podSecurityContext:
     runAsNonRoot: false
+    # Clear the unprivileged defaults — this image's nginx master runs as root.
+    runAsUser: null
+    runAsGroup: null
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:

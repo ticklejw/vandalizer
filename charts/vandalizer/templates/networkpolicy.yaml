@@ -46,6 +46,12 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "vandalizer.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 14 }}
+        # Backend pods probe the api too (the bootstrap Job gates on
+        # /api/health before seeding).
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              vandalizer.io/role: backend
         {{- with .Values.networkPolicy.ingressNamespaceSelector }}
         # Namespaces additionally allowed to hit the api directly:
         # split-edge routing, Prometheus scraping /api/metrics, etc.

@@ -34,7 +34,7 @@ spec:
       containers:
         - name: redis
           image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
           {{- with .Values.redis.containerSecurityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
