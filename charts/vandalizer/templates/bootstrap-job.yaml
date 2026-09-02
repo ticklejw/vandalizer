@@ -63,6 +63,36 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # /api/health only returns 200 once Mongo, Redis, and ChromaDB all
+        # answer, so gating on it keeps the bootstrap from burning its retry
+        # budget while the datastores are still pulling and starting.
+        - name: wait-for-stack
+          image: {{ include "vandalizer.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.api.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - python
+            - -c
+            - |
+              import time, urllib.request
+              url = "http://{{ include "vandalizer.fullname" . }}-api:8001/api/health"
+              deadline = time.monotonic() + 900
+              while time.monotonic() < deadline:
+                  try:
+                      with urllib.request.urlopen(url, timeout=5) as r:
+                          if r.status == 200:
+                              print("stack healthy")
+                              raise SystemExit(0)
+                  except SystemExit:
+                      raise
+                  except Exception as e:
+                      print(f"waiting: {e}", flush=True)
+                  time.sleep(10)
+              raise SystemExit("timed out waiting for the stack to become healthy")
       containers:
         - name: bootstrap
           image: {{ include "vandalizer.backendImage" . }}
@@ -104,7 +134,7 @@ spec:
                   name: {{ .Values.bootstrap.existingSecret | default (printf "%s-bootstrap" (include "vandalizer.fullname" .)) }}
                   key: ORG_NAME
                   optional: true
-          {{- with .Values.beat.resources }}
+          {{- with .Values.bootstrap.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
