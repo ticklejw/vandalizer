@@ -33,7 +33,7 @@ spec:
       containers:
         - name: chromadb
           image: "{{ .Values.chromadb.image.repository }}:{{ .Values.chromadb.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.chromadb.image.pullPolicy }}
           {{- with .Values.chromadb.containerSecurityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

@@ -105,8 +105,12 @@ api:
       memory: 8Gi
   podSecurityContext:
     runAsNonRoot: true
-    # Makes the uploads volume writable by the image's appuser (uid 1000).
-    # OpenShift: set to null (the SCC supplies supplemental groups).
+    # Published backend images declare their user by name (appuser), which
+    # runAsNonRoot cannot verify — the numeric uid must be stated here.
+    # OpenShift: set runAsUser/runAsGroup/fsGroup to null (the SCC assigns them).
+    runAsUser: 1000
+    runAsGroup: 1000
+    # Makes the uploads volume writable by uid 1000.
     fsGroup: 1000
     fsGroupChangePolicy: OnRootMismatch
     seccompProfile:
@@ -138,6 +142,9 @@ celery:
   terminationGracePeriodSeconds: 3720
   podSecurityContext:
     runAsNonRoot: true
+    # See the note on api.podSecurityContext.runAsUser.
+    runAsUser: 1000
+    runAsGroup: 1000
     fsGroup: 1000
     fsGroupChangePolicy: OnRootMismatch
     seccompProfile:
@@ -241,6 +248,11 @@ frontend:
       memory: 256Mi
   podSecurityContext:
     runAsNonRoot: true
+    # The unprivileged nginx image declares its user by name, which
+    # runAsNonRoot cannot verify — state the numeric uid here.
+    # OpenShift: set to null. Root-image variant: see values-frontend-root.yaml.
+    runAsUser: 101
+    runAsGroup: 101
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -263,6 +275,9 @@ mongodb:
   image:
     repository: docker.io/library/mongo
     tag: 7.0.16
+    # Independent of image.pullPolicy: side-loaded app images (pullPolicy
+    # Never) must not stop the datastores from pulling.
+    pullPolicy: IfNotPresent
   external:
     # Full connection URI, e.g. mongodb://user:pass@mongo.example.edu:27017/
     # Used only when enabled=false.
@@ -308,6 +323,7 @@ redis:
   image:
     repository: docker.io/library/redis
     tag: 7.4-alpine
+    pullPolicy: IfNotPresent
   external:
     # Hostname only (no port, no scheme). Used only when enabled=false.
     host: ""
@@ -354,6 +370,7 @@ chromadb:
   image:
     repository: docker.io/chromadb/chroma
     tag: 0.6.3
+    pullPolicy: IfNotPresent
   external:
     # Used only when enabled=false. Rendered as host:port — CHROMADB_HOST is
     # not a URL.
@@ -366,12 +383,12 @@ chromadb:
     limits:
       cpu: "2"
       memory: 2Gi
+  # The 0.6.x image writes chroma.log into its root-owned workdir, so unlike
+  # the other components it cannot run as an arbitrary non-root user — it
+  # keeps the image's root user (capabilities still dropped). On clusters
+  # enforcing restricted Pod Security on this namespace, run ChromaDB
+  # elsewhere and set chromadb.enabled=false with external.host.
   podSecurityContext:
-    runAsNonRoot: true
-    runAsUser: 1000
-    runAsGroup: 1000
-    fsGroup: 1000
-    fsGroupChangePolicy: OnRootMismatch
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -460,6 +477,14 @@ bootstrap:
   # Pre-existing Secret with keys ADMIN_EMAIL, ADMIN_PASSWORD (and optionally
   # ADMIN_NAME, DEFAULT_TEAM_NAME, ORG_NAME). Overrides the values above.
   existingSecret: ""
+  # Catalog seeding embeds knowledge-base content in-process (it downloads
+  # ChromaDB's ONNX embedding model), so the Job needs real memory headroom.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
 
 metrics:
   serviceMonitor:
