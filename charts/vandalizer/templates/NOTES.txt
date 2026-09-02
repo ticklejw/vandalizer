@@ -2,10 +2,10 @@ Vandalizer {{ .Chart.AppVersion }} has been deployed as release "{{ .Release.Nam
 
 {{- if .Values.ingress.enabled }}
 
-Reach the app at: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/
+Reach the app at: http{{ if .Values.ingress.tls }}s{{ end }}://{{ default .Values.hostname .Values.ingress.host }}/
 {{- else if .Values.httpRoute.enabled }}
 
-An HTTPRoute was created for hostnames: {{ join ", " .Values.httpRoute.hostnames }}
+An HTTPRoute was created{{ with include "vandalizer.httpRouteHostnames" . }} for hostnames: {{ . | fromYamlArray | join ", " }}{{ end }}.
 Check that it attached to its Gateway:
   kubectl -n {{ .Release.Namespace }} get httproute {{ include "vandalizer.fullname" . }} -o jsonpath='{.status.parents}'
 {{- else }}

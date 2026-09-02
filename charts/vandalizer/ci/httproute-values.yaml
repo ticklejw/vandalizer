@@ -1,7 +1,8 @@
 # Lint/render values: Gateway API edge, ServiceMonitor, HPA, and PDBs on —
 # exercises the optional resources.
-config:
-  frontendUrl: https://vandalizer.ci.example.edu
+# hostname derivation exercised here: frontendUrl and httpRoute.hostnames
+# are intentionally NOT set — both must render from `hostname`.
+hostname: vandalizer.ci.example.edu
 secrets:
   jwtSecretKey: ci-only-jwt-secret
   configEncryptionKey: ci-only-fernet-key
@@ -13,8 +14,6 @@ httpRoute:
     - name: ci-gateway
       namespace: gateways
       sectionName: https
-  hostnames:
-    - vandalizer.ci.example.edu
 api:
   hpa:
     enabled: true
