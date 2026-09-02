@@ -787,7 +787,10 @@ def _build_agent_model(
         if endpoint:
             client_kwargs["base_url"] = endpoint
         client = AsyncOpenAI(**client_kwargs)
-        return OpenAIModel(model_name=model_name, openai_client=client)
+        # pydantic-ai v1 removed the model-level openai_client kwarg; the
+        # client is carried by the provider now (as in the branches above).
+        from pydantic_ai.providers.openai import OpenAIProvider
+        return OpenAIModel(model_name=model_name, provider=OpenAIProvider(openai_client=client))
 
     # Use the per-event-loop httpx client instead of pydantic-ai's process-wide
     # cached_async_http_client. The cached client is shared across the workflow
