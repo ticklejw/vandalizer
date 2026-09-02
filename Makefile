@@ -3,7 +3,7 @@
 BACKEND_DIR := backend
 FRONTEND_DIR := frontend
 
-.PHONY: help backend-install backend-lint backend-typecheck backend-test backend-security backend-audit review-graph endpoint-map endpoint-map-check backend-static backend-backlog backend-ci backend-test-integration-t1 backend-test-integration-t2 backend-test-integration-t3 backend-test-integration-t4 backend-judge-calibration frontend-install frontend-typecheck frontend-lint frontend-test frontend-build frontend-audit frontend-ci ci docker-build release-check security security-gate security-built-images
+.PHONY: help backend-install backend-lint backend-typecheck backend-test backend-security backend-audit review-graph endpoint-map endpoint-map-check backend-static backend-backlog backend-ci backend-test-integration-t1 backend-test-integration-t2 backend-test-integration-t3 backend-test-integration-t4 backend-judge-calibration frontend-install frontend-typecheck frontend-lint frontend-test frontend-build frontend-audit frontend-ci ci helm-lint docker-build release-check security security-gate security-built-images
 
 help:
 	@printf "Common targets:\n"
@@ -15,7 +15,8 @@ help:
 	@printf "  make frontend-install  Install frontend dependencies\n"
 	@printf "  make frontend-ci       Run frontend typecheck, lint, tests, and build\n"
 	@printf "  make ci                Run backend and frontend CI checks\n"
-	@printf "  make release-check     Run CI checks and both Docker builds\n"
+	@printf "  make helm-lint         Lint and schema-validate the Helm chart\n"
+	@printf "  make release-check     Run CI checks, Docker builds, and chart lint\n"
 	@printf "  make security          Full vulnerability report (deps, images, secrets, config)\n"
 	@printf "  make security-gate     Release-gating scan: fails on CRITICAL or a leaked secret\n"
 	@printf "  make security-built-images  Scan the published images (run after docker-build)\n"
@@ -132,6 +133,20 @@ frontend-ci: frontend-typecheck frontend-lint frontend-audit frontend-test front
 
 ci: backend-ci frontend-ci
 
+# Requires helm and kubeconform on PATH. Lints and schema-validates the chart
+# against every values permutation in charts/vandalizer/ci/, using the
+# vendored CRD schemas so the run works offline.
+helm-lint:
+	@for f in charts/vandalizer/ci/*-values.yaml; do \
+		echo "== $$f"; \
+		helm lint charts/vandalizer -f $$f --quiet || exit 1; \
+		helm template vandalizer charts/vandalizer -f $$f \
+			| kubeconform -strict -summary \
+				-schema-location default \
+				-schema-location 'charts/vandalizer/ci/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+			|| exit 1; \
+	done
+
 docker-build:
 	docker build -t vandalizer-backend ./backend
 	# Forward Sentry build-args from the shell. Unset vars expand to empty,
@@ -141,8 +156,16 @@ docker-build:
 		--build-arg VITE_SENTRY_ENVIRONMENT="$$VITE_SENTRY_ENVIRONMENT" \
 		--build-arg VITE_SENTRY_RELEASE="$$VITE_SENTRY_RELEASE" \
 		-t vandalizer-frontend ./frontend
+	# The unprivileged frontend variant published for Kubernetes; built here
+	# so release-check catches a broken target before the release workflow.
+	docker build \
+		--target runtime-unprivileged \
+		--build-arg VITE_SENTRY_DSN="$$VITE_SENTRY_DSN" \
+		--build-arg VITE_SENTRY_ENVIRONMENT="$$VITE_SENTRY_ENVIRONMENT" \
+		--build-arg VITE_SENTRY_RELEASE="$$VITE_SENTRY_RELEASE" \
+		-t vandalizer-frontend-unprivileged ./frontend
 
-release-check: backend-static ci security-gate docker-build
+release-check: backend-static ci security-gate docker-build helm-lint
 
 # ---------------------------------------------------------------------------
 # Vulnerability scanning (Trivy)
