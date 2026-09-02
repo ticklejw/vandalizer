@@ -1,0 +1,31 @@
+# Lint/render values: Gateway API edge, ServiceMonitor, HPA, and PDBs on —
+# exercises the optional resources.
+config:
+  frontendUrl: https://vandalizer.ci.example.edu
+secrets:
+  jwtSecretKey: ci-only-jwt-secret
+  configEncryptionKey: ci-only-fernet-key
+bootstrap:
+  existingSecret: my-bootstrap-secret
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: ci-gateway
+      namespace: gateways
+      sectionName: https
+  hostnames:
+    - vandalizer.ci.example.edu
+api:
+  hpa:
+    enabled: true
+  pdb:
+    enabled: true
+frontend:
+  pdb:
+    enabled: true
+metrics:
+  serviceMonitor:
+    enabled: true
+networkPolicy:
+  ingressNamespaceSelector:
+    kubernetes.io/metadata.name: monitoring
