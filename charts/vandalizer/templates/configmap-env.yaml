@@ -6,7 +6,7 @@ metadata:
     {{- include "vandalizer.labels" (dict "ctx" . "component" "config") | nindent 4 }}
 data:
   ENVIRONMENT: {{ .Values.config.environment | quote }}
-  FRONTEND_URL: {{ required "config.frontendUrl is required (the public URL users reach the app at)" .Values.config.frontendUrl | quote }}
+  FRONTEND_URL: {{ include "vandalizer.frontendUrl" . | quote }}
   MONGO_HOST: {{ include "vandalizer.mongoUri" . | quote }}
   REDIS_HOST: {{ include "vandalizer.redisHost" . | quote }}
   # app/services/credentials_service.py reads the lowercase name from

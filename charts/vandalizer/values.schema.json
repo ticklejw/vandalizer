@@ -3,6 +3,10 @@
   "title": "vandalizer chart values",
   "type": "object",
   "properties": {
+    "hostname": {
+      "type": "string",
+      "description": "Public hostname, stated once; derives config.frontendUrl, httpRoute.hostnames, and ingress.host unless those are set explicitly."
+    },
     "config": {
       "type": "object",
       "properties": {
@@ -132,17 +136,9 @@
     "ingress": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "enabled": { "const": true } } },
-          "then": {
-            "properties": { "host": { "type": "string", "minLength": 1 } },
-            "required": ["host"]
-          }
-        }
-      ]
+        "enabled": { "type": "boolean" },
+        "host": { "type": "string" }
+      }
     },
     "httpRoute": {
       "type": "object",
