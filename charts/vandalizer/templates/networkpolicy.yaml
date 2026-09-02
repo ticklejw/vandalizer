@@ -1,0 +1,59 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+The application offers no way to put credentials on Redis or ChromaDB (and
+the chart's MongoDB runs unauthenticated, compose-style), so these policies
+are the compensating control: only this release's backend pods may reach the
+datastores, and only the frontend (plus explicitly allowed namespaces, e.g. a
+Gateway's or Prometheus') may reach the api.
+Ingress-only — egress is left open.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vandalizer.fullname" . }}-datastores
+  labels:
+    {{- include "vandalizer.labels" (dict "ctx" . "component" "networkpolicy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "vandalizer.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [mongodb, redis, chromadb]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              vandalizer.io/role: backend
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vandalizer.fullname" . }}-api
+  labels:
+    {{- include "vandalizer.labels" (dict "ctx" . "component" "networkpolicy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vandalizer.selectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "vandalizer.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 14 }}
+        {{- with .Values.networkPolicy.ingressNamespaceSelector }}
+        # Namespaces additionally allowed to hit the api directly:
+        # split-edge routing, Prometheus scraping /api/metrics, etc.
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: 8001
+          protocol: TCP
+{{- end }}
