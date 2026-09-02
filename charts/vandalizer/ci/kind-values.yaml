@@ -1,0 +1,62 @@
+# Smoke-test values for a single-node kind cluster.
+#
+# kind's local-path provisioner cannot provision ReadWriteMany claims, so the
+# uploads volume drops to ReadWriteOnce — safe on one node, where every pod
+# can still mount it. Images are side-loaded (`kind load ...`), hence
+# pullPolicy Never. NetworkPolicy stays enabled but kind's default CNI
+# (kindnet) does not enforce policies.
+config:
+  frontendUrl: http://localhost:8080
+  environment: production
+secrets:
+  jwtSecretKey: kind-smoke-jwt-secret
+  configEncryptionKey: REPLACE_WITH_FERNET_KEY
+bootstrap:
+  adminEmail: smoke@example.edu
+  adminPassword: kind-smoke-password
+image:
+  backend:
+    repository: localhost/vandalizer-backend
+    tag: kind-smoke
+  frontend:
+    repository: localhost/vandalizer-frontend-unprivileged
+    tag: kind-smoke
+  pullPolicy: Never
+uploads:
+  accessModes:
+    - ReadWriteOnce
+  size: 2Gi
+  annotations: {}
+mongodb:
+  persistence:
+    size: 2Gi
+    annotations: {}
+chromadb:
+  persistence:
+    size: 2Gi
+    annotations: {}
+# Keep the smoke footprint small.
+celery:
+  queues:
+    documents:
+      concurrency: 2
+      replicas: 1
+    workflows:
+      concurrency: 2
+      replicas: 1
+    uploads:
+      concurrency: 2
+      replicas: 1
+    passive:
+      concurrency: 1
+      replicas: 1
+    default:
+      concurrency: 1
+      replicas: 1
+api:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 4Gi
