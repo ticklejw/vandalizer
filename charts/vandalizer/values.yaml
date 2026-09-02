@@ -46,6 +46,11 @@ config:
   # (api + celery + bootstrap), e.g. GRAPH_NOTIFICATION_URL,
   # VANDALIZER_BASE_URL, SMTP settings, LOG_FORMAT. Keys are used verbatim.
   extraEnv: {}
+  # Optional: token counting can read HuggingFace tokenizer vocabularies from
+  # TOKENIZER_CACHE_ROOT (default /hf-cache; without it the app estimates and
+  # logs that it did). To provide one, mount a volume there on api and celery
+  # via api.extraVolumes/extraVolumeMounts and celery.extraVolumes/
+  # extraVolumeMounts — compose parity is the ${HF_CACHE_PATH} bind mount.
 
 secrets:
   # Name of a pre-existing Secret to use instead of the chart-managed one.
