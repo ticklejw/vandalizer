@@ -58,7 +58,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # The shared nginx.conf listens on 80 for the default image; non-root nginx
 # cannot bind it, so rewrite to this base image's conventional 8080.
 RUN sed -i 's/listen 80;/listen 8080;/' /etc/nginx/conf.d/default.conf
-USER nginx
+# Numeric (the base image's nginx user) so Kubernetes' runAsNonRoot check can
+# verify it without a runAsUser override.
+USER 101:101
 
 EXPOSE 8080
 

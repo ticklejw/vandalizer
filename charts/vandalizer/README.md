@@ -119,9 +119,13 @@ assign UIDs:
 ```yaml
 api:
   podSecurityContext:
+    runAsUser: null
+    runAsGroup: null
     fsGroup: null
 celery:
   podSecurityContext:
+    runAsUser: null
+    runAsGroup: null
     fsGroup: null
 mongodb:
   podSecurityContext:
