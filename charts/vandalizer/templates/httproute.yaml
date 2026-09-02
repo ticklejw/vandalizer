@@ -19,9 +19,9 @@ metadata:
 spec:
   parentRefs:
     {{- toYaml (required "httpRoute.parentRefs is required when httpRoute.enabled=true" .Values.httpRoute.parentRefs) | nindent 4 }}
-  {{- with .Values.httpRoute.hostnames }}
+  {{- with include "vandalizer.httpRouteHostnames" . }}
   hostnames:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   rules:
     {{- with .Values.httpRoute.additionalRules }}

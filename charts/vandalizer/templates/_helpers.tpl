@@ -105,6 +105,32 @@ than producing a half-configured deployment.
 {{- end }}
 
 {{/*
+Public URL of the app: explicit config.frontendUrl wins, else derived from
+the top-level hostname. One of the two is required.
+*/}}
+{{- define "vandalizer.frontendUrl" -}}
+{{- if .Values.config.frontendUrl }}
+{{- .Values.config.frontendUrl }}
+{{- else if .Values.hostname }}
+{{- printf "https://%s" .Values.hostname }}
+{{- else }}
+{{- fail "set hostname (or config.frontendUrl) — the public URL users reach the app at" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Hostnames for the HTTPRoute: explicit list wins, else the top-level hostname.
+May legitimately be empty (attach to all of the Gateway's hostnames).
+*/}}
+{{- define "vandalizer.httpRouteHostnames" -}}
+{{- if .Values.httpRoute.hostnames }}
+{{- toYaml .Values.httpRoute.hostnames }}
+{{- else if .Values.hostname }}
+{{- toYaml (list .Values.hostname) }}
+{{- end }}
+{{- end }}
+
+{{/*
 Name of the Secret holding backend secrets (chart-managed or user-supplied).
 */}}
 {{- define "vandalizer.secretName" -}}
