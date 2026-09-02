@@ -8,6 +8,11 @@
 #   bootstrap.adminEmail / bootstrap.adminPassword (or disable bootstrap)
 # and a ReadWriteMany-capable storage class for `uploads` (or an existingClaim).
 
+# The public hostname users reach the app at, stated once. Derives, unless
+# individually overridden: config.frontendUrl (as https://<hostname>),
+# httpRoute.hostnames, and ingress.host.
+hostname: ""
+
 image:
   backend:
     repository: ghcr.io/ui-insight/vandalizer-backend
@@ -33,8 +38,9 @@ config:
   # development | staging | production. Outside "development" the backend
   # refuses to start with a default JWT_SECRET_KEY.
   environment: production
-  # Public URL users reach the app at, e.g. https://vandalizer.example.edu.
-  # Required — feeds CORS and cookie-security decisions in the backend.
+  # Public URL users reach the app at — feeds CORS and cookie-security
+  # decisions in the backend. Defaults to https://<hostname>; set this only
+  # when the scheme or URL differs (e.g. plain http on an intranet).
   frontendUrl: ""
   # Where uploaded files live inside backend pods; the uploads volume is
   # mounted here on the api, every celery worker, beat, and the bootstrap job.

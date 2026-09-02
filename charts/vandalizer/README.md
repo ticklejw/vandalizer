@@ -31,16 +31,19 @@ non-root frontend image by default).
 ```bash
 helm install vandalizer charts/vandalizer \
   --namespace vandalizer --create-namespace \
-  --set config.frontendUrl=https://vandalizer.example.edu \
+  --set hostname=vandalizer.example.edu \
   --set secrets.jwtSecretKey="$(openssl rand -hex 32)" \
   --set secrets.configEncryptionKey="$FERNET_KEY" \
   --set bootstrap.adminEmail=admin@example.edu \
   --set bootstrap.adminPassword="$ADMIN_PASSWORD" \
   --set httpRoute.enabled=true \
   --set httpRoute.parentRefs[0].name=my-gateway \
-  --set httpRoute.parentRefs[0].namespace=gateways \
-  --set 'httpRoute.hostnames[0]=vandalizer.example.edu'
+  --set httpRoute.parentRefs[0].namespace=gateways
 ```
+
+`hostname` is stated once and derives `config.frontendUrl`
+(`https://<hostname>`), `httpRoute.hostnames`, and `ingress.host`; set any of
+those explicitly to override (e.g. a plain-http `frontendUrl` on an intranet).
 
 For real installs prefer a values file, and prefer `secrets.existingSecret`
 (a Secret whose keys are the environment-variable names: `JWT_SECRET_KEY`,
