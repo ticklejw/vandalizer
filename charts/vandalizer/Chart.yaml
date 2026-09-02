@@ -10,7 +10,7 @@ version: 0.1.0
 # Default image tag for the application images. Matches the release tags
 # published by .github/workflows/release.yaml (compose users know this value
 # as VANDALIZER_VERSION). Override per-image via image.*.tag.
-appVersion: "v4.9.0"
+appVersion: "v4.11.0"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/ui-insight/vandalizer
 sources:
