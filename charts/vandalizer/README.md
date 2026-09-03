@@ -179,6 +179,23 @@ re-running it resets the admin password. Credentials come from
 - Celery pods get `terminationGracePeriodSeconds: 3720` so in-flight tasks
   (up to the app's 3660s task time limit) survive rollouts.
 
+## Uninstall behavior
+
+Two things `helm uninstall` does on purpose that can surprise:
+
+- **Celery worker pods take up to 62 minutes to terminate.** They carry
+  `terminationGracePeriodSeconds: 3720` so in-flight tasks survive normal
+  rollouts; on uninstall the broker is deleted in the same breath, the
+  workers' warm shutdown hangs on the vanished broker, and the kubelet only
+  SIGKILLs them at the deadline. Safe to skip the wait:
+  `kubectl delete pod --all -n <ns> --grace-period=0 --force`.
+- **The uploads, MongoDB, and ChromaDB PVCs are kept** (they carry
+  `helm.sh/resource-policy: keep`) so an uninstall can never take your data
+  with it. Reinstalling under the same release name re-adopts them.
+  `kubectl delete pvc ...` explicitly when you truly want the data gone —
+  and note that with a `Retain`-policy storage class the released PV still
+  survives that, for a cluster admin to clean up.
+
 ## Known limitations (upstream application work, not chart work)
 
 - Uploads require a shared filesystem (RWX) — the S3 storage backend exists
