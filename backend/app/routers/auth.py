@@ -839,7 +839,23 @@ async def oauth_azure_callback(
     mail = profile.get("mail") or profile.get("userPrincipalName")
     display_name = profile.get("displayName")
 
-    user = await auth_service.resolve_oauth_user(upn, mail, display_name)
+    try:
+        user = await auth_service.resolve_oauth_user(
+            upn,
+            mail,
+            display_name,
+            jit_provisioning=azure.get("jit_provisioning", True),
+        )
+    except auth_service.JitProvisioningDisabled:
+        await audit_service.log_event(
+            action="user.login_denied",
+            actor_user_id=upn,
+            resource_type="user",
+            resource_id=upn,
+            detail={"method": "oauth", "reason": "jit_provisioning_disabled"},
+            ip_address=request.client.host if request.client else None,
+        )
+        return RedirectResponse(f"{landing}?error=sso_user_not_provisioned")
 
     response = RedirectResponse(f"{settings.frontend_url}/")
     _set_tokens(response, user, settings)
@@ -893,12 +909,29 @@ async def saml_acs(request: Request, settings: Settings = Depends(get_settings))
         # makes the browser re-POST the SAML form to the redirect target.
         return RedirectResponse(f"{landing}?error=saml_failed&detail={e}", status_code=303)
 
-    user = await auth_service.resolve_saml_user(
-        uid=attrs["uid"],
-        email=attrs["email"],
-        display_name=attrs["display_name"],
-        department=attrs.get("department"),
-    )
+    try:
+        user = await auth_service.resolve_saml_user(
+            uid=attrs["uid"],
+            email=attrs["email"],
+            display_name=attrs["display_name"],
+            department=attrs.get("department"),
+            jit_provisioning=saml_provider.get("jit_provisioning", True),
+        )
+    except auth_service.JitProvisioningDisabled:
+        await audit_service.log_event(
+            action="user.login_denied",
+            actor_user_id=attrs["uid"],
+            resource_type="user",
+            resource_id=attrs["uid"],
+            detail={"method": "saml", "reason": "jit_provisioning_disabled"},
+            ip_address=request.client.host if request.client else None,
+        )
+        # Default to /landing (which renders ?error=), not /login (which
+        # swallows it); 303 because this handler answers the SAML POST.
+        landing = saml_provider.get("error_redirect", settings.frontend_url + "/landing")
+        return RedirectResponse(
+            f"{landing}?error=sso_user_not_provisioned", status_code=303
+        )
 
     await audit_service.log_event(
         action="user.login",
