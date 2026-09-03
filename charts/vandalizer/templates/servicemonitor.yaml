@@ -1,8 +1,8 @@
 {{- if .Values.metrics.serviceMonitor.enabled }}
 {{/*
 Requires the Prometheus Operator CRDs. Note /api/metrics is unauthenticated;
-the chart's NetworkPolicy blocks it unless the scraping namespace matches
-networkPolicy.ingressNamespaceSelector.
+the chart's NetworkPolicy blocks scraping unless the Prometheus namespace is
+admitted via networkPolicy.apiExtraIngressFrom.
 */}}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor

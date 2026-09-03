@@ -466,12 +466,21 @@ networkPolicy:
   # on clusters with a default-deny baseline. Note: a platform-level
   # AdminNetworkPolicy with a hard Deny cannot be overridden here.
   enabled: true
-  # Namespaces allowed to reach the frontend (and, additionally to the
-  # frontend itself, the api — needed for split-edge routing or Prometheus
-  # scraping /api/metrics), e.g. {kubernetes.io/metadata.name: gateway-system}.
-  # Empty admits every namespace to the frontend and only in-release pods to
-  # the api.
-  ingressNamespaceSelector: {}
+  # Peers allowed to reach the frontend on its container port. Verbatim
+  # NetworkPolicyPeer entries, so namespaceSelector, podSelector, and ipBlock
+  # all work. Empty = any namespace (the edge's location varies per cluster).
+  # A hostNetwork ingress controller or Gateway arrives from NODE IPs, which
+  # no selector matches — use an ipBlock covering the node CIDR for those:
+  #   frontendIngressFrom:
+  #     - namespaceSelector:
+  #         matchLabels: {kubernetes.io/metadata.name: gateway-system}
+  #     - ipBlock:
+  #         cidr: 10.0.0.0/24   # node CIDR, hostNetwork edges only
+  frontendIngressFrom: []
+  # Additional peers (beyond this release's frontend and backend pods) allowed
+  # to reach the api on :8001 — split-edge routing sending /api straight to
+  # the api Service, or Prometheus scraping /api/metrics. Same verbatim form.
+  apiExtraIngressFrom: []
 
 serviceAccount:
   create: true
