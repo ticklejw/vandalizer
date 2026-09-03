@@ -16,6 +16,14 @@ INGESTION_WARNING_LABELS = {
     # entry here `ingestion_warnings()` filtered it straight back out, so the
     # extraction run reported a warning code that rendered as nothing.
     "low_quality_text": "most of the stored text is unreadable",
+    # Emitted by the extraction path when a document contributed nothing to a
+    # run (no stored text and no loadable file) — never stored on the
+    # document itself, but registered here so the renderer that maps codes to
+    # words (#803) can't repeat the low_quality_text story above.
+    "no_extractable_text": "this document could not be read and contributed nothing to the run",
+    # The pdf_hidden_text scrub could not inspect the file, so text the page
+    # never displays may have reached the stored content unfiltered.
+    "hidden_text_unchecked": "the hidden-text safety check could not run on this document",
 }
 
 
@@ -33,9 +41,22 @@ def ingestion_warning_text(doc: SmartDocument) -> str:
     return "; ".join(labels)
 
 
+#: Warning codes that mean "the stored text is real but incomplete/degraded".
+#: hidden_text_unchecked is deliberately NOT here: that document's text may
+#: contain EXTRA unvetted content, the inverse risk — telling the user content
+#: may be missing (and to retry extraction for "the full text") would assert
+#: the opposite of what happened.
+COMPLETENESS_WARNING_CODES = frozenset({"partial_ocr", "sparse_text", "low_quality_text"})
+
+
 def is_partially_ingested(doc: SmartDocument) -> bool:
     """True when the stored text is real but is not the whole document."""
-    return bool(ingestion_warnings(doc))
+    return any(c in COMPLETENESS_WARNING_CODES for c in ingestion_warnings(doc))
+
+
+def has_unchecked_hidden_text(doc: SmartDocument) -> bool:
+    """True when the hidden-text scrub could not inspect this document."""
+    return "hidden_text_unchecked" in ingestion_warnings(doc)
 
 
 def is_extraction_low_quality(doc: SmartDocument) -> bool:

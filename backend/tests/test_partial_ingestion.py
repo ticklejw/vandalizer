@@ -257,3 +257,39 @@ class TestEveryRunPathDiscloses:
             "these run paths extract from a possibly half-read document and "
             f"report nothing about it: {missing}"
         )
+
+
+class TestNoExtractableTextFlagging:
+    """One writer for the per-document no_extractable_text disclosure, so the
+    entry shape and dedupe rule cannot drift between the nothing-readable
+    pre-flight, the combined-context merge, and the engine-skipped loop."""
+
+    def test_creates_and_dedupes_entries(self):
+        from app.services.search_set_service import _flag_no_extractable_text
+
+        warnings: list[dict] = []
+        _flag_no_extractable_text(warnings, "d1", "Award letter")
+        _flag_no_extractable_text(warnings, "d1", "Award letter")
+        assert warnings == [{
+            "document_uuid": "d1", "title": "Award letter",
+            "codes": ["no_extractable_text"],
+        }]
+
+    def test_merges_into_an_existing_documents_entry(self):
+        from app.services.search_set_service import _flag_no_extractable_text
+
+        warnings = [{"document_uuid": "d1", "title": "T", "codes": ["partial_ocr"]}]
+        _flag_no_extractable_text(warnings, "d1", "T")
+        assert warnings[0]["codes"] == ["partial_ocr", "no_extractable_text"]
+
+    def test_none_out_list_is_a_no_op(self):
+        from app.services.search_set_service import _flag_no_extractable_text
+
+        _flag_no_extractable_text(None, "d1", "T")  # must not raise
+
+    def test_code_has_a_label_registered_for_the_renderer(self):
+        """The registry's own comment records how low_quality_text once
+        rendered as nothing for lack of an entry here."""
+        from app.services.document_service import INGESTION_WARNING_LABELS
+
+        assert "no_extractable_text" in INGESTION_WARNING_LABELS

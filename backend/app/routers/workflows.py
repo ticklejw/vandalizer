@@ -1808,6 +1808,13 @@ async def start_workflow_optimization(
         )
 
     from app.models.workflow_optimization_run import WorkflowOptimizationRun
+    from app.services.workflow_optimizer import reap_stale_runs
+
+    # Recover any orphaned run first so a dead worker's "running" doc can't
+    # permanently block new runs via the active check below — the sweep the
+    # extraction start path already does.
+    await reap_stale_runs(workflow_id)
+
     active = await WorkflowOptimizationRun.find_one(
         WorkflowOptimizationRun.workflow_id == workflow_id,
         {"status": {"$in": ["queued", "running"]}},
@@ -1843,10 +1850,14 @@ async def start_workflow_optimization(
     await run.insert()
 
     from app.tasks.workflow_optimization_tasks import optimize_workflow_task
-    optimize_workflow_task.delay(
+    async_result = optimize_workflow_task.delay(
         workflow_id, user.user_id, run.uuid,
         token_budget, apply_on_finish, max_candidates, include_judge,
     )
+    # Stored so the reaper can revoke a still-queued task rather than let it
+    # resurrect a doc already finalized as abandoned (same as extraction).
+    run.celery_task_id = async_result.id
+    await run.save()
     return {"run_uuid": run.uuid, "status": "queued"}
 
 
