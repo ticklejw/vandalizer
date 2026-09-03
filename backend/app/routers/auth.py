@@ -889,7 +889,9 @@ async def saml_acs(request: Request, settings: Settings = Depends(get_settings))
         attrs = process_saml_response(saml_provider, request, post_data)
     except ValueError as e:
         landing = saml_provider.get("error_redirect", settings.frontend_url + "/login")
-        return RedirectResponse(f"{landing}?error=saml_failed&detail={e}")
+        # 303, not the default 307: this handler answers a POST, and a 307
+        # makes the browser re-POST the SAML form to the redirect target.
+        return RedirectResponse(f"{landing}?error=saml_failed&detail={e}", status_code=303)
 
     user = await auth_service.resolve_saml_user(
         uid=attrs["uid"],
@@ -907,7 +909,10 @@ async def saml_acs(request: Request, settings: Settings = Depends(get_settings))
         ip_address=request.client.host if request.client else None,
     )
 
-    response = RedirectResponse(f"{settings.frontend_url}/")
+    # 303 so the browser GETs the app instead of re-POSTing the SAML form
+    # at "/" (RedirectResponse defaults to 307, which preserves the method
+    # and body — the static frontend answers that POST with a 405).
+    response = RedirectResponse(f"{settings.frontend_url}/", status_code=303)
     _set_tokens(response, user, settings)
     return response
 
