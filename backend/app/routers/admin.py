@@ -361,6 +361,11 @@ class OAuthProviderRequest(BaseModel):
     client_secret: str = ""
     redirect_uri: Optional[str] = None
     enabled: bool = True
+    # When False, SSO logins for identities with no existing account are
+    # denied instead of auto-created (JIT provisioning off). Plain bool with
+    # a default on purpose: model_dump(exclude_none=True) then always stores
+    # it, so the full-replace update handler can't drop it.
+    jit_provisioning: bool = True
     tenant_id: Optional[str] = None
     metadata_url: Optional[str] = None
     entity_id: Optional[str] = None

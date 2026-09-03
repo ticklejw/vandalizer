@@ -608,11 +608,11 @@ export function testPrompt(data: { model_name: string; system_prompt: string; us
 
 // Auth
 
-export function addOAuthProvider(data: Record<string, string>) {
+export function addOAuthProvider(data: Record<string, unknown>) {
   return apiFetch<{ status: string }>('/api/admin/config/auth/providers', { method: 'POST', body: JSON.stringify(data) })
 }
 
-export function updateOAuthProvider(providerId: string, data: Record<string, string>) {
+export function updateOAuthProvider(providerId: string, data: Record<string, unknown>) {
   return apiFetch<{ status: string }>(`/api/admin/config/auth/providers/${encodeURIComponent(providerId)}`, { method: 'PUT', body: JSON.stringify(data) })
 }
 
