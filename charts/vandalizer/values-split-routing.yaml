@@ -7,7 +7,8 @@
 #
 # The additional rule matches /api before the catch-all frontend rule
 # (Gateway API prefers the more specific path match). The api NetworkPolicy
-# must admit the Gateway's namespace — set ingressNamespaceSelector.
+# must admit the Gateway's namespace — set networkPolicy.apiExtraIngressFrom
+# (use an ipBlock instead if the Gateway data plane runs hostNetwork).
 httpRoute:
   enabled: true
   parentRefs:
@@ -29,5 +30,7 @@ httpRoute:
         - name: RELEASE-NAME-vandalizer-api   # adjust to your release fullname
           port: 8001
 networkPolicy:
-  ingressNamespaceSelector:
-    kubernetes.io/metadata.name: gateways
+  apiExtraIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateways
