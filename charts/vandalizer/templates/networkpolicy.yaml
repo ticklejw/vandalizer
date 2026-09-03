@@ -68,12 +68,10 @@ spec:
             matchLabels:
               app.kubernetes.io/instance: {{ .Release.Name }}
               vandalizer.io/role: backend
-        {{- with .Values.networkPolicy.ingressNamespaceSelector }}
-        # Namespaces additionally allowed to hit the api directly:
-        # split-edge routing, Prometheus scraping /api/metrics, etc.
-        - namespaceSelector:
-            matchLabels:
-              {{- toYaml . | nindent 14 }}
+        {{- with .Values.networkPolicy.apiExtraIngressFrom }}
+        # Extra peers admitted to the api directly: split-edge routing,
+        # Prometheus scraping /api/metrics, etc.
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       ports:
         - port: 8001
@@ -96,13 +94,12 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
-        {{- if .Values.networkPolicy.ingressNamespaceSelector }}
-        - namespaceSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 14 }}
+        {{- if .Values.networkPolicy.frontendIngressFrom }}
+        {{- toYaml .Values.networkPolicy.frontendIngressFrom | nindent 8 }}
         {{- else }}
         # Any namespace — the edge's namespace varies per cluster. Set
-        # networkPolicy.ingressNamespaceSelector to pin it down.
+        # networkPolicy.frontendIngressFrom to pin it down (use an ipBlock
+        # for hostNetwork edges, which arrive from node IPs).
         - namespaceSelector: {}
         {{- end }}
       ports:

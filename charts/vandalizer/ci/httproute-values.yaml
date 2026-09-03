@@ -25,6 +25,16 @@ frontend:
 metrics:
   serviceMonitor:
     enabled: true
+# Exercises both peer-list values, including the ipBlock form used for
+# hostNetwork edges.
 networkPolicy:
-  ingressNamespaceSelector:
-    kubernetes.io/metadata.name: monitoring
+  frontendIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateways
+    - ipBlock:
+        cidr: 10.0.0.0/24
+  apiExtraIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
