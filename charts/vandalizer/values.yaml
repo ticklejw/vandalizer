@@ -459,13 +459,18 @@ httpRoute:
 # restricts api ingress to the frontend (plus monitoring when the
 # ServiceMonitor is enabled).
 networkPolicy:
+  # Renders policies that both restrict (only backend pods reach the
+  # unauthenticated datastores; only the frontend and allowed namespaces
+  # reach the api) and grant (frontend ingress from the edge, frontend egress
+  # to api+DNS, unrestricted backend egress) — the grants make the chart work
+  # on clusters with a default-deny baseline. Note: a platform-level
+  # AdminNetworkPolicy with a hard Deny cannot be overridden here.
   enabled: true
-  # By default only this release's frontend pods may reach the api. Add
-  # namespace labels here to also admit traffic from other namespaces —
-  # needed for split-edge routing (a Gateway sending /api straight to the api
-  # Service) or Prometheus scraping /api/metrics, e.g.
-  # {kubernetes.io/metadata.name: gateway-system}. The frontend itself is
-  # left unrestricted (no policy selects it) so any edge can reach it.
+  # Namespaces allowed to reach the frontend (and, additionally to the
+  # frontend itself, the api — needed for split-edge routing or Prometheus
+  # scraping /api/metrics), e.g. {kubernetes.io/metadata.name: gateway-system}.
+  # Empty admits every namespace to the frontend and only in-release pods to
+  # the api.
   ingressNamespaceSelector: {}
 
 serviceAccount:
