@@ -1946,16 +1946,38 @@ async def parse_saml_metadata(
         raise HTTPException(status_code=400, detail=f"Could not read IdP metadata: {e}")
 
     idp = data.get("idp", {}) if isinstance(data, dict) else {}
+
+    # The parser flattens to "x509cert" only when one cert serves both
+    # signing and encryption. IdPs that publish distinct certs (standard for
+    # Shibboleth) come back as x509certMulti instead — take the signing certs
+    # from there. Multiple signing certs mean a key rollover is in progress;
+    # the first is used and the rest are surfaced so the admin can swap if
+    # logins fail against the newer key.
+    signing_certs = [c for c in [idp.get("x509cert", "")] if c]
+    if not signing_certs:
+        signing_certs = (idp.get("x509certMulti") or {}).get("signing") or []
+
     result = {
         "idp_entity_id": idp.get("entityId", ""),
         "idp_sso_url": (idp.get("singleSignOnService") or {}).get("url", ""),
-        "idp_x509_cert": idp.get("x509cert", ""),
+        "idp_x509_cert": signing_certs[0] if signing_certs else "",
     }
     if not all(result.values()):
+        missing = [
+            label
+            for key, label in [
+                ("idp_entity_id", "entityID"),
+                ("idp_sso_url", "HTTP-Redirect SSO URL"),
+                ("idp_x509_cert", "signing certificate"),
+            ]
+            if not result[key]
+        ]
         raise HTTPException(
             status_code=422,
-            detail="Metadata is missing an entityID, HTTP-Redirect SSO URL, or signing certificate.",
+            detail=f"Metadata is missing: {', '.join(missing)}.",
         )
+    if len(signing_certs) > 1:
+        result["idp_x509_cert_alternates"] = signing_certs[1:]
     return result
 
 
