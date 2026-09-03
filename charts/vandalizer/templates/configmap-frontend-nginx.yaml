@@ -15,6 +15,19 @@ metadata:
     {{- include "vandalizer.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
 data:
   default.conf: |
+    # This nginx terminates plain HTTP inside the cluster, so $scheme is
+    # always "http" — stamping it into X-Forwarded-Proto would overwrite the
+    # truthful value set by the TLS-terminating edge (Cloudflare, the
+    # Gateway, an Ingress controller) and break anything scheme-sensitive
+    # downstream (SAML issuer/ACS URLs, cookie security). Pass the upstream
+    # header through when present; when empty (direct access, port-forward),
+    # proxy_set_header drops the header and the app falls back to the real
+    # request scheme.
+    map $http_x_forwarded_proto $edge_scheme {
+        default $http_x_forwarded_proto;
+        ""      $scheme;
+    }
+
     server {
         listen {{ .Values.frontend.containerPort }};
         server_name _;
@@ -42,7 +55,7 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $edge_scheme;
 
             # SSE/streaming support (for chat endpoints)
             proxy_buffering off;
@@ -56,7 +69,7 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $edge_scheme;
         }
 
         # index.html must never be cached so deploys take effect immediately
