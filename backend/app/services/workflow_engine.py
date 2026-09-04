@@ -1988,7 +1988,28 @@ class DataExportNode(Node):
                 writer.writeheader()
                 writer.writerow({k: str(v) for k, v in input_data.items()})
             else:
+                # Not tabular. Writing str(input_data) and still labelling it
+                # .csv shipped a one-cell blob Excel opens without complaint —
+                # a prompt step's prose "exported as CSV". Ship it as the text
+                # it is, and say so on the step.
                 buf.write(str(input_data))
+                content = buf.getvalue()
+                warning = (
+                    "This step's input was not tabular (no list of rows or "
+                    "single record), so it was exported as plain text rather "
+                    "than CSV. Put an Extraction or Formatter step before "
+                    "Data Export to produce rows."
+                )
+                data_b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+                return {
+                    "output": {
+                        "type": "file_download", "data_b64": data_b64,
+                        "file_type": "txt", "filename": f"{filename}.txt",
+                    },
+                    "input": inputs.get("output"),
+                    "step_name": self.name,
+                    "warning": warning,
+                }
             content = buf.getvalue()
             ext = "csv"
         else:

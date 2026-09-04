@@ -2618,3 +2618,25 @@ class TestResearchNodeNoRelevantFindings:
         assert "general knowledge" in pass1
         assert "must come from the Findings below or the CONTEXT" in pass2
         assert "Findings:\nfindings" in pass2
+
+
+class TestDataExportNonTabularCsv:
+    """#812: a non-tabular input was written as str(input_data) and still
+    labelled .csv — a prose blob Excel opens without complaint."""
+
+    def test_prose_input_exports_as_text_with_a_warning(self):
+        node = DataExportNode({"format": "csv", "filename": "report"})
+        result = node.process({"output": "The award totals $485,000 for year one."})
+
+        assert result["output"]["file_type"] == "txt"
+        assert result["output"]["filename"] == "report.txt"
+        assert "not tabular" in result["warning"]
+        decoded = base64.b64decode(result["output"]["data_b64"]).decode()
+        assert "485,000" in decoded
+
+    def test_tabular_input_is_still_csv(self):
+        node = DataExportNode({"format": "csv", "filename": "rows"})
+        result = node.process({"output": [{"a": "1", "b": "2"}]})
+        assert result["output"]["file_type"] == "csv"
+        assert result["output"]["filename"] == "rows.csv"
+        assert "warning" not in result

@@ -35,6 +35,17 @@ def ingestion_warnings(doc: SmartDocument) -> list[str]:
     ]
 
 
+def warning_text_for_codes(codes: list[str]) -> str:
+    """The warnings as one readable clause, from codes alone.
+
+    Same registry as ``ingestion_warning_text``, for callers holding codes
+    rather than a document (extraction runs record per-document warnings
+    that never live on the document itself).
+    """
+    labels = [INGESTION_WARNING_LABELS[c] for c in codes if c in INGESTION_WARNING_LABELS]
+    return "; ".join(labels)
+
+
 def ingestion_warning_text(doc: SmartDocument) -> str:
     """The warnings as one readable clause, or "" when there are none."""
     labels = [INGESTION_WARNING_LABELS[c] for c in ingestion_warnings(doc)]
@@ -174,6 +185,10 @@ async def list_contents(
                 "error_message": d.error_message,
                 "extraction_low_quality": is_extraction_low_quality(d),
                 "ingestion_warnings": ingestion_warnings(d),
+                # The list endpoint is what feeds the file browser; serving
+                # only codes here left the caveat icon dark on the exact
+                # screen #803 is about.
+                "ingestion_warning_text": ingestion_warning_text(d),
             }
             for d in documents
         ],
@@ -265,4 +280,5 @@ async def poll_status(doc_uuid: str, user: User) -> dict | None:
         "title": doc.title,
         "extraction_low_quality": is_extraction_low_quality(doc),
         "ingestion_warnings": ingestion_warnings(doc),
+        "ingestion_warning_text": ingestion_warning_text(doc),
     }

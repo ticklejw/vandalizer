@@ -536,9 +536,17 @@ def execute_workflow_passive(self, trigger_event_id: str) -> dict:
                 "tasks": tasks,
             })
 
-        # Resolve model
+        # Resolve model. The canvas says a workflow's default model "runs every
+        # step on this model" without qualifying it to interactive runs, so an
+        # automated run has to honour it too -- otherwise the same workflow uses
+        # one model when a person clicks Run and another when the schedule
+        # fires, with nothing in the UI saying so. Falling back to the first
+        # configured model stays the last resort.
         models = sys_config.get("available_models", [])
-        model = models[0]["name"] if models else "gpt-4o-mini"
+        model = (
+            (workflow.get("input_config") or {}).get("default_model")
+            or (models[0]["name"] if models else "gpt-4o-mini")
+        )
 
         # Check if the workflow owner is an admin (gates code execution)
         wf_user_id = workflow.get("user_id")
