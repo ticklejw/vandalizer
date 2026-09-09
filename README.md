@@ -29,12 +29,12 @@ The project was developed at the University of Idaho under the NSF GRANTED progr
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Docker & Docker Compose | Recent | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
+| Docker & Docker Compose (or podman + podman-compose) | Recent | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) · [podman.io](https://podman.io/docs/installation) |
 | Python | >= 3.11, < 3.13 | [python.org](https://www.python.org/downloads/) (local dev only) |
 | Node.js | >= 20 | [nodejs.org](https://nodejs.org/) (local dev only) |
 | `uv` | Latest | [docs.astral.sh/uv](https://docs.astral.sh/uv/) (local dev only) |
 
-Docker is required for both paths below. Python, Node.js, and `uv` are only needed for local development (Option B).
+A container engine is required for both paths below — Docker, or podman with podman-compose (the scripts detect which is installed; see [DEPLOY.md](DEPLOY.md#container-engine-docker-or-podman)). Python, Node.js, and `uv` are only needed for local development (Option B).
 
 ## Quickstart
 
@@ -247,6 +247,7 @@ React Frontend  -->  FastAPI Backend  -->  MongoDB
 - [Operations Guide](OPERATIONS.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
 - [Contributing Guide](CONTRIBUTING.md)
+- [Code Review Graph](docs/review-graph.md) — optional local code graph for reviewers
 - [Security Policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 

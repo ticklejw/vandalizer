@@ -14,6 +14,29 @@ After the first run, the same script is the entry point for ongoing operations: 
 
 The frontend is available at the URL you configured (defaults to `http://localhost`) and the API at `http://localhost:8001` when setup completes.
 
+### Container engine: Docker or podman
+
+The deploy path is engine-agnostic. `setup.sh`, `status.sh` and `upgrade.sh`
+look for `docker` first and fall back to `podman`, and for a Compose
+implementation in the order `docker compose` → `docker-compose` →
+`podman-compose`; they find containers by Compose labels and `inspect` rather
+than Docker-only `ps` fields, and accept both the `project-svc` and
+`project_svc` container-name conventions. Image references in the Dockerfiles
+and `compose.yaml` are fully qualified (`docker.io/...`, `ghcr.io/...`), because
+podman cannot answer its short-name prompt without a TTY and a distro
+short-name alias can silently redirect a bare `mongo` to a registry that
+rejects the pull. The api, celery and frontend services declare their
+healthchecks at the Compose level as well as in the Dockerfiles, since
+OCI-format builds drop Dockerfile `HEALTHCHECK`.
+
+Verified end to end on RHEL 10 with podman 5.8 and podman-compose 1.5 (full
+stack healthy, health endpoints answering through the published port). Where
+this guide and [OPERATIONS.md](OPERATIONS.md) say `docker compose ...`, read
+`podman-compose ...` on a podman host; the subcommands are the same. One
+visible difference from earlier releases: a fully stopped stack now counts as
+an existing deployment, so `./setup.sh` offers repair/upgrade rather than a
+fresh install until you remove it.
+
 ### Escape hatch: manual Docker Compose
 
 This path exists for operators who need to script each step themselves (CI builds, golden images, configuration-management tools). The interactive wizard above is the supported path for everyone else.
