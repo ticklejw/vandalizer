@@ -212,6 +212,9 @@ export function DocumentViewer({ docUuid, highlightTerms = [], highlightPage = n
     setDocxText(null)
     setBlobUrl(null)
     setPreviewUnavailable(false)
+    // Per-document too: a stale banner from the previous document would offer
+    // "Retry extraction" on one that read fine when this poll rejects.
+    setLowQuality(false)
 
     fetch(inlineUrl, { method: 'HEAD', credentials: 'include' })
       .then(async (resp) => {

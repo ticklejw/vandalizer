@@ -339,7 +339,14 @@ def perform_extraction_and_update(
     try:
         db.smart_document.update_one(
             {"uuid": document_uuid},
-            {"$set": {"processing": True, "task_status": "extracting"}},
+            # updated_at is the retry route's staleness clock: a document
+            # whose worker died mid-extraction is told apart from one still
+            # being read by how long ago this write happened.
+            {"$set": {
+                "processing": True,
+                "task_status": "extracting",
+                "updated_at": datetime.datetime.now(),
+            }},
         )
 
         raw_text = ""
@@ -1098,8 +1105,13 @@ def perform_semantic_ingestion(self, raw_text: str, document_uuid: str, user_id:
     try:
         dm = DocumentManager(persist_directory=settings.chromadb_persist_dir)
         # A retry must replace the chunks from the previous extraction, or
-        # retrieval keeps answering from the old text.
-        dm.delete_document(user_id, document_uuid)
+        # retrieval keeps answering from the old text. Only when there is
+        # new text to replace them with: the extraction task returns "" on
+        # a failed read rather than raising, so the chain still reaches
+        # here, and wiping the old chunks then would turn a document that
+        # was searchable a minute ago into one that is not.
+        if text.strip():
+            dm.delete_document(user_id, document_uuid)
         chunk_count = dm.add_document(
             user_id=user_id,
             document_name=doc.get("title", ""),

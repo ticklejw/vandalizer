@@ -793,6 +793,38 @@ class TestPerformSemanticIngestion:
     @patch("app.services.document_manager.DocumentManager")
     @patch("app.config.Settings")
     @patch("app.tasks.document_tasks.get_sync_db")
+    def test_failed_re_extraction_keeps_the_previous_chunks(
+        self, mock_get_db, MockSettings, MockDM,
+    ):
+        """The extraction task returns "" on a failed read rather than
+        raising, so the chain still ingests. Deleting the old chunks then
+        would strip a document that was searchable a minute ago out of
+        retrieval entirely — worse than leaving the old text beside an
+        error state."""
+        from app.tasks.document_tasks import perform_semantic_ingestion
+
+        db = MagicMock()
+        mock_get_db.return_value = db
+        db.smart_document.find_one.return_value = {
+            "uuid": "doc-1", "title": "Report.pdf", "path": "uploads/report.pdf",
+            "raw_text": "",
+        }
+
+        settings = MagicMock()
+        settings.chromadb_persist_dir = "/data/chroma"
+        MockSettings.return_value = settings
+
+        dm_instance = MagicMock()
+        dm_instance.add_document.return_value = 0
+        MockDM.return_value = dm_instance
+
+        perform_semantic_ingestion(raw_text="", document_uuid="doc-1", user_id="user1")
+
+        dm_instance.delete_document.assert_not_called()
+
+    @patch("app.services.document_manager.DocumentManager")
+    @patch("app.config.Settings")
+    @patch("app.tasks.document_tasks.get_sync_db")
     def test_sets_task_status_to_readying_then_complete(self, mock_get_db, MockSettings, MockDM):
         from app.tasks.document_tasks import perform_semantic_ingestion
 

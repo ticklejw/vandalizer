@@ -508,13 +508,23 @@ class TestGarbledTextLayerGate:
             },
         )()
 
+    @staticmethod
+    def _completed_ocr(text):
+        """An OCR call that reached the service and got ``text`` back —
+        the only shape the gate may act on."""
+        def fake_ocr(pdf_path, report=None):
+            if report is not None:
+                report["ocr_completed"] = True
+            return text
+        return fake_ocr
+
     def test_image_based_with_empty_ocr_returns_empty_not_pymupdf(self, text_pdf):
         from unittest.mock import patch
         import app.services.document_readers as dr
 
         classification = self._image_based_classification()
         with patch("pdf_inspector.classify_pdf", return_value=classification), \
-             patch.object(dr, "ocr_extract_text_from_pdf", return_value=""), \
+             patch.object(dr, "ocr_extract_text_from_pdf", side_effect=self._completed_ocr("")), \
              patch.object(
                  dr, "_pymupdf_extract_with_pages",
                  return_value=("\x00\x01\x02" * 100, [{"char_offset": 0, "kind": "page", "value": 1}]),
@@ -530,7 +540,7 @@ class TestGarbledTextLayerGate:
 
         classification = self._image_based_classification()
         with patch("pdf_inspector.classify_pdf", return_value=classification), \
-             patch.object(dr, "ocr_extract_text_from_pdf", return_value="abc"), \
+             patch.object(dr, "ocr_extract_text_from_pdf", side_effect=self._completed_ocr("abc")), \
              patch.object(
                  dr, "_pymupdf_extract_with_pages",
                  return_value=("\x00\x01\x02" * 100, [{"char_offset": 0, "kind": "page", "value": 1}]),
@@ -552,6 +562,7 @@ class TestGarbledTextLayerGate:
 
         def fake_ocr(pdf_path, report=None):
             if report is not None:
+                report["ocr_completed"] = True
                 report["partial"] = True
                 report["errors"] = ["converter gave up at page 3"]
             return ""
@@ -586,6 +597,45 @@ class TestGarbledTextLayerGate:
         report: dict = {}
         with patch("pdf_inspector.classify_pdf", return_value=classification), \
              patch.object(dr, "ocr_extract_text_from_pdf", side_effect=skipped_ocr), \
+             patch.object(dr, "_pymupdf_extract_with_pages", return_value=pymupdf_result) as mock_pymupdf:
+            result = dr._read_pdf_text_and_markers(text_pdf, report=report)
+
+        assert result == pymupdf_result
+        mock_pymupdf.assert_called_once()
+        assert "text_layer_rejected" not in report
+
+    def test_permanent_ocr_failure_keeps_the_pymupdf_fallback(self, text_pdf):
+        """A wrong API key (401) or an oversized file (413) exhausts the
+        attempts and returns "" without OCR ever reading a page. That is not
+        a verdict on the document: refusing the text layer there would error
+        every image_based PDF on a misconfigured deployment, where before the
+        gate they extracted through PyMuPDF."""
+        from unittest.mock import patch
+        import app.services.document_readers as dr
+
+        classification = self._image_based_classification()
+        pymupdf_result = ("some pymupdf text", [{"char_offset": 0, "kind": "page", "value": 1}])
+
+        report: dict = {}
+        with patch("pdf_inspector.classify_pdf", return_value=classification), \
+             patch.object(dr, "ocr_extract_text_from_pdf", return_value=""), \
+             patch.object(dr, "_pymupdf_extract_with_pages", return_value=pymupdf_result) as mock_pymupdf:
+            result = dr._read_pdf_text_and_markers(text_pdf, report=report)
+
+        assert result == pymupdf_result
+        mock_pymupdf.assert_called_once()
+        assert "text_layer_rejected" not in report
+
+    def test_ocr_that_raises_keeps_the_pymupdf_fallback(self, text_pdf):
+        from unittest.mock import patch
+        import app.services.document_readers as dr
+
+        classification = self._image_based_classification()
+        pymupdf_result = ("some pymupdf text", [{"char_offset": 0, "kind": "page", "value": 1}])
+
+        report: dict = {}
+        with patch("pdf_inspector.classify_pdf", return_value=classification), \
+             patch.object(dr, "ocr_extract_text_from_pdf", side_effect=ValueError("bad input")), \
              patch.object(dr, "_pymupdf_extract_with_pages", return_value=pymupdf_result) as mock_pymupdf:
             result = dr._read_pdf_text_and_markers(text_pdf, report=report)
 
@@ -919,6 +969,52 @@ class TestOcrSkippedIsRecorded:
 
         assert result == ""
         assert report["ocr_skipped"] == "unconfigured"
+
+
+class TestOcrCompletedIsRecorded:
+    """The gate acts on a positive signal — OCR reached the service and got
+    a response — not on the absence of ``ocr_skipped``, because a permanent
+    4xx after the attempts run out returns "" through neither path."""
+
+    def _db(self):
+        from unittest.mock import MagicMock
+        db = MagicMock()
+        db.system_config.find_one.return_value = {
+            "ocr_endpoint": "https://ocr.example/convert",
+            "ocr_api_key": "k",
+        }
+        return db
+
+    def test_successful_conversion_records_ocr_completed(self):
+        from unittest.mock import patch
+        import app.services.document_readers as dr
+
+        report: dict = {}
+        with patch("app.tasks.get_sync_db", return_value=self._db()), \
+             patch("app.utils.encryption.decrypt_value", side_effect=lambda v: v or ""), \
+             patch("app.services.ocr_client.convert", return_value=""):
+            result = dr.ocr_extract_text_from_pdf("some.pdf", report=report)
+
+        assert result == ""
+        assert report["ocr_completed"] is True
+
+    def test_permanent_failure_does_not_record_ocr_completed(self):
+        from unittest.mock import patch
+        import app.services.document_readers as dr
+        from app.services import ocr_client
+
+        report: dict = {}
+        with patch("app.tasks.get_sync_db", return_value=self._db()), \
+             patch("app.utils.encryption.decrypt_value", side_effect=lambda v: v or ""), \
+             patch(
+                 "app.services.ocr_client.convert",
+                 side_effect=ocr_client.OcrRequestError("HTTP 401", status_code=401, body=""),
+             ):
+            result = dr.ocr_extract_text_from_pdf("some.pdf", report=report)
+
+        assert result == ""
+        assert "ocr_completed" not in report
+        assert "ocr_skipped" not in report
 
 
 class TestPymupdfMissingFileIsBuiltinError:

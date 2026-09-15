@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -135,6 +136,25 @@ async def poll_status(
     return result
 
 
+# How long an in-progress extraction may go without a status write before a
+# retry is allowed to replace it. The in-flight guard below is the only thing
+# standing between a document and a second dispatch, but the shape this route
+# itself writes — processing=True, task_status="extracting", raw_text="" — is
+# one no sweeper repairs, so a worker that dies after that write would
+# otherwise leave the document reading "Reading text…" and this route
+# answering 409 forever. Extraction and the retry route both stamp updated_at
+# when they take the lock; a large OCR job finishes well inside this.
+_EXTRACTION_STALE_AFTER = timedelta(minutes=30)
+
+
+def _extraction_is_stale(doc: SmartDocument) -> bool:
+    updated_at = doc.updated_at
+    if updated_at is None:
+        return True
+    now = datetime.now(updated_at.tzinfo) if updated_at.tzinfo else datetime.now()
+    return now - updated_at > _EXTRACTION_STALE_AFTER
+
+
 @router.post("/{doc_uuid}/retry-extraction")
 @limiter.limit("30/minute")
 async def retry_extraction(
@@ -164,7 +184,8 @@ async def retry_extraction(
     from app.tasks.document_tasks import _IN_PROGRESS_TASK_STATUSES
     from app.tasks.upload_tasks import dispatch_upload_tasks
 
-    if doc.processing or doc.task_status in _IN_PROGRESS_TASK_STATUSES:
+    in_flight = doc.processing or doc.task_status in _IN_PROGRESS_TASK_STATUSES
+    if in_flight and not _extraction_is_stale(doc):
         raise HTTPException(
             status_code=409,
             detail="Extraction is already in progress for this document",
@@ -177,6 +198,7 @@ async def retry_extraction(
 
     doc.task_status = "extracting"
     doc.processing = True
+    doc.updated_at = datetime.now()
     doc.error_message = None
     doc.raw_text = ""
     doc.token_count = 0

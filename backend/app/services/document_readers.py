@@ -201,7 +201,7 @@ def ocr_extract_text_from_pdf(
     for attempt in range(retries):
         try:
             with httpx.Client(timeout=timeout) as client:
-                return ocr_client.convert(
+                text = ocr_client.convert(
                     client,
                     pdf_path=pdf_path,
                     endpoint=ocr_endpoint,
@@ -211,6 +211,14 @@ def ocr_extract_text_from_pdf(
                     use_async=use_async,
                     report=report,
                 )
+            # The garbled-layer gate needs a positive "OCR looked at the
+            # pages" signal: every other way out of this function — never
+            # configured, undecryptable key, a permanent 4xx after the
+            # attempts ran out — also returns "" and must not be mistaken
+            # for a verdict on the document.
+            if report is not None:
+                report["ocr_completed"] = True
+            return text
         except ocr_client.OcrRequestError as e:
             last_error = e
             logger.warning(
@@ -1138,13 +1146,15 @@ def _read_pdf_text_and_markers(
             return ocr_text, []
         num_pages = pdf_page_count(file_path)
         return ocr_text, _interpolate_page_markers(ocr_text, num_pages)
-    if _text_layer_untrustworthy(classification) and not report.get("ocr_skipped"):
+    if _text_layer_untrustworthy(classification) and report.get("ocr_completed"):
         # OCR ran and could not read the pages, and the classifier says the
         # local text layer is glyph-ID mojibake — so there is nothing worth
-        # storing. When OCR was never configured no request was made at all,
-        # and the verdict on its own is not enough to refuse the only text
-        # there is: that case keeps the PyMuPDF fallback below and the
-        # existing low-quality notice.
+        # storing. When OCR never looked at the pages — no endpoint on this
+        # deployment, a key the worker can't decrypt, a wrong key or an
+        # oversized file the service rejected outright, or a request that
+        # raised — the verdict on its own is not enough to refuse the only
+        # text there is: those cases keep the PyMuPDF fallback below and the
+        # existing low-quality notice, exactly as before the gate existed.
         logger.warning(
             "PDF %s: classifier says image_based (%d page(s) need OCR) and "
             "OCR returned %d chars — refusing the local text layer rather "

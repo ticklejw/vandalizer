@@ -4,6 +4,7 @@ Verifies team membership validation and auth enforcement.
 """
 
 import secrets
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -48,6 +49,7 @@ def _make_document(
     task_status="complete",
     processing=False,
     extraction_nonletter_ratio=None,
+    updated_at=None,
 ):
     doc = MagicMock()
     doc.uuid = doc_uuid
@@ -67,6 +69,7 @@ def _make_document(
     doc.task_status = task_status
     doc.processing = processing
     doc.extraction_nonletter_ratio = extraction_nonletter_ratio
+    doc.updated_at = datetime.now() if updated_at is None else updated_at
     doc.save = AsyncMock()
     return doc
 
@@ -492,6 +495,25 @@ class TestRetryExtractionRoute:
         assert "already in progress" in resp.json()["detail"]
         mock_dispatch.assert_not_called()
         doc.save.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stale_in_flight_extraction_can_be_retried(self, client):
+        """processing=True, task_status="extracting", raw_text="" is the
+        shape this route writes and no sweeper repairs; once the lock is
+        older than the window the worker is presumed dead, and the route
+        must not be the reason the document stays at "Reading text…"."""
+        doc = _make_document(
+            doc_uuid="doc-1", user_id="owner1",
+            task_status="extracting", processing=True,
+            updated_at=datetime.now() - timedelta(hours=2),
+        )
+        resp, mock_dispatch, _ = await self._post(client, doc)
+
+        assert resp.status_code == 200
+        mock_dispatch.assert_called_once()
+        doc.save.assert_awaited_once()
+        # The new lock is stamped, so a second retry inside the window is a 409.
+        assert datetime.now() - doc.updated_at < timedelta(minutes=1)
 
     @pytest.mark.asyncio
     async def test_stalled_in_progress_status_is_rejected_too(self, client):
