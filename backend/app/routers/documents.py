@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from app.models.team import Team, TeamMembership
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services import access_control, audit_service, document_service
+from app.services.extraction_staleness import EXTRACTION_STALE_AFTER, extraction_is_stale
 
 router = APIRouter()
 
@@ -138,21 +139,17 @@ async def poll_status(
 
 # How long an in-progress extraction may go without a status write before a
 # retry is allowed to replace it. The in-flight guard below is the only thing
-# standing between a document and a second dispatch, but the shape this route
+# standing between a document and a second dispatch, and the shape this route
 # itself writes — processing=True, task_status="extracting", raw_text="" — is
-# one no sweeper repairs, so a worker that dies after that write would
-# otherwise leave the document reading "Reading text…" and this route
-# answering 409 forever. Extraction and the retry route both stamp updated_at
-# when they take the lock; a large OCR job finishes well inside this.
-_EXTRACTION_STALE_AFTER = timedelta(minutes=30)
+# what a worker that dies after that write leaves behind. The window is the
+# same one the reap_stuck sweep uses to mark such a document failed, imported
+# from a single definition so the route can never allow a retry while the
+# sweep still considers the lock live (or vice versa).
+_EXTRACTION_STALE_AFTER = EXTRACTION_STALE_AFTER
 
 
 def _extraction_is_stale(doc: SmartDocument) -> bool:
-    updated_at = doc.updated_at
-    if updated_at is None:
-        return True
-    now = datetime.now(updated_at.tzinfo) if updated_at.tzinfo else datetime.now()
-    return now - updated_at > _EXTRACTION_STALE_AFTER
+    return extraction_is_stale(doc.updated_at, doc.created_at)
 
 
 @router.post("/{doc_uuid}/retry-extraction")
