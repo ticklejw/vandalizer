@@ -38,9 +38,18 @@ export interface QualityHistoryItem {
    *  marks a run over hand-picked queries: listed and exportable, but not
    *  the item's quality score. */
   source?: string | null
-  /** On a smoke-test run: how many queries were chosen out of the set. */
-  query_selection?: { selected: number; total: number } | null
+  /** On a smoke-test run: how many queries were chosen out of the set.
+   *  ``requested`` (newer runs) is what the caller asked for; the route now
+   *  refuses a selection that doesn't fully match, so it equals ``selected``. */
+  query_selection?: { selected: number; requested?: number; total: number } | null
 }
+
+/** Source tag for a "Run selected" smoke test — a run over hand-picked
+ *  queries that is listed and exportable but never the quality score. */
+const SMOKE_TEST_SOURCE = 'smoke_test'
+/** How faded a smoke-test bar draws: visible, but not mistakable for a run
+ *  that counted. */
+const SMOKE_TEST_BAR_OPACITY = 0.35
 
 interface Props {
   fetchHistory: () => Promise<{ history: QualityHistoryItem[] }>
@@ -162,7 +171,12 @@ export function QualityTimeline({
   }
 
   const ordered = [...items].reverse()
-  const scoreValues = ordered.map(i => i.score ?? 0)
+  // Smoke tests don't set the axis: a 2-of-150 run at 100% must not stretch
+  // the scale the full runs are read against. (They still draw, faded and
+  // outlined, at their position on the full-run scale.)
+  const scoreValues = ordered
+    .filter(i => i.source !== SMOKE_TEST_SOURCE)
+    .map(i => i.score ?? 0)
   const max = Math.max(...scoreValues, 100)
   const min = Math.min(...scoreValues, 0)
 
@@ -230,11 +244,13 @@ export function QualityTimeline({
           if (it.mode) titleBits.push(`mode: ${it.mode}`)
           if (it.source === 'optimizer_apply') titleBits.push('source: optimizer apply')
           if (it.source === 'passive_monthly') titleBits.push('source: monthly auto-re-judge')
-          if (it.source === 'smoke_test') {
+          const isSmoke = it.source === SMOKE_TEST_SOURCE
+          if (isSmoke) {
             const sel = it.query_selection
             titleBits.push(
-              `smoke test${sel ? ` over ${sel.selected} of ${sel.total} ${sampleNoun}` : ''} — not the quality score`,
+              `smoke test${sel ? ` (${sel.selected} of ${sel.total} ${sampleNoun})` : ''}, not counted toward the quality score`,
             )
+            if (sel) titleBits.push(`selected ${sel.selected}/${sel.total}`)
           }
           if (sigmaPts > 0) {
             const meta = it.judge_variance_meta
@@ -242,19 +258,31 @@ export function QualityTimeline({
             titleBits.push(`±${(sigmaPts * 1.96).toFixed(1)}pts 95% CI${provenance}`)
           }
           const isApply = it.source === 'optimizer_apply'
+          const title = titleBits.join(' · ')
           return (
             <div
               key={it.uuid || i}
-              title={titleBits.join(' · ')}
+              role="img"
+              title={title}
+              aria-label={title}
+              data-source={it.source || undefined}
               style={{
                 flex: 1, minWidth: 6, position: 'relative',
                 height: `${Math.max(4, heightPct)}%`,
                 display: 'flex', flexDirection: 'column-reverse',
+                // A smoke-test bar is faded with a dashed outline so a
+                // 2-of-150 run at 100% reads as a smoke test, not as a jump
+                // in the score. The outline sits on the wrapper so it stays
+                // crisp while the fill below is dimmed.
+                outline: isSmoke ? '1px dashed #fbbf24' : undefined,
+                outlineOffset: isSmoke ? -1 : undefined,
+                borderRadius: 2,
               }}
             >
               <div style={{
                 width: '100%', height: '100%',
                 backgroundColor: c, borderRadius: 2,
+                opacity: isSmoke ? SMOKE_TEST_BAR_OPACITY : undefined,
                 outline: isApply ? '1px solid #a78bfa' : undefined,
               }} />
               {ciHalfPct > 0 && (
