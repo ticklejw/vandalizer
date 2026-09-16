@@ -6,6 +6,7 @@ All functions are synchronous — safe for Celery workers.
 
 import io
 import logging
+import os
 import re
 from datetime import date, datetime, time
 from typing import NoReturn
@@ -66,8 +67,57 @@ def clean_markdown_nans(markdown_content: str) -> str:
     return "\n".join(filtered_lines)
 
 
+# Containers and executables that MarkItDown would otherwise "convert": its
+# zip converter walks archives and renders every member it can, and its
+# plain-text converter accepts any file that charset detection assigns *some*
+# charset to — so an archive or an .exe could ingest as a successfully
+# processed document without ever reaching the gated text reader (#834).
+_ARCHIVE_OR_EXECUTABLE_EXTENSIONS = frozenset({
+    "zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "jar", "war", "apk",
+    "iso", "dmg", "exe", "dll", "so", "bin", "class", "pyc", "o",
+})
+# Leading bytes of the same families: zip (PK), 7z, RAR, gzip, PE/DOS (MZ),
+# ELF, and Java class / Mach-O fat (CAFEBABE).
+_ARCHIVE_OR_EXECUTABLE_MAGIC = (
+    b"PK\x03\x04", b"7z\xbc\xaf", b"Rar!", b"\x1f\x8b", b"MZ", b"\x7fELF",
+    b"\xca\xfe\xba\xbe",
+)
+# Document formats that legitimately ARE zip archives; their bytes start with
+# PK and must not be refused by the magic check.
+_ZIP_BASED_DOCUMENT_EXTENSIONS = frozenset({
+    "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub",
+    "docm", "xlsm", "pptm", "xlsb", "dotx", "xltx", "potx",
+})
+
+
+def _looks_like_archive_or_executable(file_path: str, file_extension: str) -> bool:
+    """Whether a file is a container or executable by name or leading bytes.
+
+    The extension exemption for zip-based document formats applies to the
+    magic check only: a .zip is refused whatever it holds, while a .docx is
+    let through to the converter that knows how to read one.
+    """
+    ext = file_extension.lower().lstrip(".")
+    if ext in _ZIP_BASED_DOCUMENT_EXTENSIONS:
+        return False
+    if ext in _ARCHIVE_OR_EXECUTABLE_EXTENSIONS:
+        return True
+    with open(file_path, "rb") as f:
+        head = f.read(8)
+    return head.startswith(_ARCHIVE_OR_EXECUTABLE_MAGIC)
+
+
 def convert_to_markdown(doc_path: str, keep_data_uris: bool = True) -> str:
-    """Convert a document to Markdown format using MarkItDown."""
+    """Convert a document to Markdown format using MarkItDown.
+
+    Archives and executables are refused here, before MarkItDown sees them,
+    with the same actionable ``DocumentReadError`` the gated text reader
+    raises for a binary — so every call site (upload, chat attachment, the
+    unknown-extension fallback) refuses them the same way.
+    """
+    ext = os.path.splitext(doc_path)[1].lstrip(".").lower()
+    if _looks_like_archive_or_executable(doc_path, ext):
+        _refuse_binary(doc_path, ext)
     md = MarkItDown(enable_plugins=False)
     result = md.convert(doc_path, keep_data_uris=keep_data_uris)
     return clean_markdown_nans(result.text_content)
@@ -617,7 +667,15 @@ def extract_sheet_json_from_csv(csv_path: str) -> dict:
     """
     import csv as _csv
 
-    raw = _read_text_with_fallback(csv_path)
+    # The gated reader: the previous decode ladder ended in errors="replace",
+    # which cannot fail, so a binary named .csv rendered as a mojibake grid.
+    try:
+        raw = read_text_file(csv_path, "csv")
+    except DocumentReadError:
+        raise DocumentReadError(
+            "This file is not a text CSV — its contents look binary. Re-save "
+            "it as CSV (UTF-8) or upload the original spreadsheet."
+        ) from None
     sample = raw[:8192]
     try:
         dialect = _csv.Sniffer().sniff(sample, delimiters=",;\t|")
@@ -664,18 +722,6 @@ def extract_sheet_json_from_xls(xls_path: str) -> dict:
             "hidden": getattr(ws, "visibility", 0) != 0,
         })
     return {"sheets": sheets}
-
-
-def _read_text_with_fallback(path: str) -> str:
-    """Decode a text file, tolerating the encodings spreadsheets arrive in."""
-    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
-        try:
-            with open(path, encoding=encoding) as f:
-                return f.read()
-        except UnicodeDecodeError:
-            continue
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return f.read()
 
 
 _DOCX_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -1295,6 +1341,23 @@ def _looks_like_binary(text: str) -> bool:
     characters (no text encoding decodes to them — a NUL-interleaved result
     means the wrong codec was used), and the density of characters no text
     encoding uses for content.
+
+    Three "is this text?" definitions coexist, each for a different moment:
+
+    * ``app.utils.file_validation.is_valid_file_content`` — the intake
+      allow-list. Cheap (first 8 KB, strict UTF-8 for text extensions, magic
+      bytes for the rest), runs on the upload/attachment bytes before anything
+      is stored, and exists to reject the obviously wrong file early.
+    * ``_looks_like_binary`` (this function) — the post-decode gate. Runs on
+      the *decoded* string after a codec has accepted the bytes and decides
+      whether the result is document text or a binary in a text coat.
+    * ``app.utils.extraction_quality.nonletter_ratio`` — a stored quality
+      signal on text that *was* accepted (a garbled PDF text layer), shown as
+      a warning rather than used to refuse.
+
+    Rule: new code gates on ``_looks_like_binary`` after decode;
+    ``is_valid_file_content`` stays the cheap pre-storage check. Converging
+    the three is left for a future issue (#834 follow-up).
     """
     sample = text[:_BINARY_SNIFF_BYTES]
     if not sample:
@@ -1408,7 +1471,11 @@ def extract_text_from_file(file_path: str, file_extension: str) -> str:
 
         else:
             try:
-                return convert_to_markdown(file_path, keep_data_uris=False)
+                text = convert_to_markdown(file_path, keep_data_uris=False)
+            except DocumentReadError:
+                # The archive/executable interception: authoritative, not a
+                # cue to try the text reader on the same bytes.
+                raise
             except Exception:
                 # Unknown extension MarkItDown refused. The gated reader is
                 # the last resort: it decodes real text (any of the cascade's
@@ -1418,6 +1485,13 @@ def extract_text_from_file(file_path: str, file_extension: str) -> str:
                 # decoded "successfully", was stored as raw_text, chunked,
                 # embedded, and answered from.
                 return read_text_file(file_path, file_extension)
+            # MarkItDown's plain-text converter accepts a file whenever
+            # charset detection assigns it *any* charset, so its "success" on
+            # an unknown extension is no more proof of text than latin-1's
+            # was. Same gate as the text reader, on the converted output.
+            if _looks_like_binary(text):
+                _refuse_binary(file_path, file_extension)
+            return text
 
     except FileNotFoundError:
         # A missing source file (deleted mid-processing, retention sweep, or a

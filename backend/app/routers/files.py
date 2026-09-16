@@ -210,7 +210,14 @@ async def sheet_json(
     """Return evaluated rows for an .xlsx file so the viewer can render
     formula results instead of blank cells when Excel didn't cache them.
     """
-    result = await file_service.render_xlsx_sheets(doc_uuid, settings, user=user)
+    from app.services.document_readers import DocumentReadError
+
+    try:
+        result = await file_service.render_xlsx_sheets(doc_uuid, settings, user=user)
+    except DocumentReadError as e:
+        # The file is readable but is not a spreadsheet's text (a binary
+        # named .csv). The message is user-facing; the viewer shows it.
+        raise HTTPException(status_code=422, detail=str(e)) from e
     if result is None:
         raise HTTPException(status_code=404, detail="Sheet rendering not available")
     return result
