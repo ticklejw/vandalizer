@@ -1433,6 +1433,13 @@ async def check_source_health(kb_uuid: str) -> dict:
             except Exception as e:
                 entry["status"] = "unhealthy"
                 entry["error"] = str(e)[:200]
+            # Fetch-time caveats (hidden_text_unchecked) are not a health
+            # failure — the page is reachable and fully indexed — but the
+            # report carries them so a reviewer sees which sources hold
+            # text the hidden-text defense never inspected.
+            source_warnings = list(getattr(source, "warnings", None) or [])
+            if source_warnings:
+                entry["warnings"] = source_warnings
         elif source.source_type == "document" and source.document_uuid:
             doc = await SmartDocument.find_one(SmartDocument.uuid == source.document_uuid)
             if not doc or not (doc.raw_text or "").strip():

@@ -327,3 +327,76 @@ async def test_a_shell_that_differs_between_attempts_stays_refused():
                    AsyncMock(return_value=_result("Error 502 (b)"))):
             assert await knowledge_service.refresh_url_source(src, MagicMock(uuid="kb-1")) is not None
     dm.add_to_kb.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# #834: fetch-time advisories (a PDF the hidden-text scrub could not inspect)
+# are persisted on the source row, and a later clean fetch clears them.
+# ---------------------------------------------------------------------------
+
+def _pdf_result(text: str, advisories: list[str]) -> WebFetchResult:
+    r = _result(text)
+    r.advisories = list(advisories)
+    return r
+
+
+@pytest.mark.asyncio
+async def test_refresh_records_the_hidden_text_unchecked_advisory_on_the_source():
+    src = _source()
+    new_text = "Last Updated: July 13, 2026\nA. Purpose. new text"
+
+    with patch("app.services.web_fetcher.fetch_url",
+               AsyncMock(return_value=_pdf_result(new_text, ["hidden_text_unchecked"]))), \
+         patch.object(knowledge_service, "_get_dm", return_value=_dm()):
+        reason = await knowledge_service.refresh_url_source(src, MagicMock(uuid="kb-1"))
+
+    assert reason is None
+    assert src.status == "ready"
+    assert src.warnings == ["hidden_text_unchecked"]
+
+
+@pytest.mark.asyncio
+async def test_a_later_clean_refresh_clears_an_earlier_advisory():
+    src = _source(warnings=["hidden_text_unchecked"])
+    new_text = "Last Updated: July 13, 2026\nA. Purpose. new text"
+
+    with patch("app.services.web_fetcher.fetch_url", AsyncMock(return_value=_result(new_text))), \
+         patch.object(knowledge_service, "_get_dm", return_value=_dm()):
+        reason = await knowledge_service.refresh_url_source(src, MagicMock(uuid="kb-1"))
+
+    assert reason is None
+    assert src.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_refresh_also_rewrites_the_advisory():
+    """The fetch, not the re-embed, is what carries the caveat — a refresh
+    that finds the same text still ran a fresh scrub."""
+    from app.utils import kb_source_currency as currency
+
+    text = "Last updated: December 1, 2018\nA. Overview. old text"
+    src = _source(content=text, content_hash=currency.content_fingerprint(text),
+                  warnings=["hidden_text_unchecked"])
+
+    with patch("app.services.web_fetcher.fetch_url", AsyncMock(return_value=_result(text))), \
+         patch.object(knowledge_service, "_get_dm", return_value=_dm()):
+        reason = await knowledge_service.refresh_url_source(src, MagicMock(uuid="kb-1"))
+
+    assert reason is None
+    assert src.last_refresh_outcome == currency.OUTCOME_UNCHANGED
+    assert src.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_first_ingest_records_the_advisory_on_the_source():
+    src = _source(status="pending", content=None, chunk_count=0)
+    text = "A. Purpose. " + "Award terms and conditions apply to every subaward. " * 20
+
+    with patch("app.services.web_fetcher.fetch_url",
+               AsyncMock(return_value=_pdf_result(text, ["hidden_text_unchecked"]))), \
+         patch.object(knowledge_service, "_get_dm", return_value=_dm()):
+        result = await knowledge_service._ingest_url_source(src, MagicMock(uuid="kb-1"))
+
+    assert result is not None
+    assert src.status == "ready"
+    assert src.warnings == ["hidden_text_unchecked"]

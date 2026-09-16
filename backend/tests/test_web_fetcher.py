@@ -585,3 +585,46 @@ async def test_blocked_fetch_raises_immediately_when_browser_disabled():
             await fetch_url("https://example.com/blocked", settings=settings)
 
     assert mock_render.called is False
+
+
+# ---------------------------------------------------------------------------
+# #834: a fetched PDF whose hidden-text scrub could not run says so on the
+# result, so KB ingestion can record it on the source instead of the caveat
+# living only in a log line.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pdf_whose_hidden_text_scrub_fails_carries_an_advisory():
+    from app.services import pdf_hidden_text
+
+    settings = Settings(web_fetcher_browser_enabled=False)
+    pdf = _tiny_pdf_bytes("Award terms and conditions, section 4")
+
+    def unscrubbed(pdf_path, text, markers=None, report=None):
+        if report is not None:
+            report["hidden_text_unchecked"] = True
+        return text, markers or []
+
+    with patch("app.services.web_fetcher.httpx.AsyncClient",
+               return_value=_mock_pdf_client(pdf)), \
+         patch("app.services.web_fetcher.validate_outbound_url",
+               return_value="https://www.usda.gov/x/terms.pdf"), \
+         patch.object(pdf_hidden_text, "scrub_pdf", side_effect=unscrubbed):
+        result = await fetch_url("https://www.usda.gov/x/terms.pdf", settings=settings)
+
+    assert "Award terms" in result.text
+    assert result.advisories == ["hidden_text_unchecked"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_whose_hidden_text_scrub_ran_carries_no_advisory():
+    settings = Settings(web_fetcher_browser_enabled=False)
+    pdf = _tiny_pdf_bytes("Award terms and conditions, section 4")
+
+    with patch("app.services.web_fetcher.httpx.AsyncClient",
+               return_value=_mock_pdf_client(pdf)), \
+         patch("app.services.web_fetcher.validate_outbound_url",
+               return_value="https://www.usda.gov/x/terms.pdf"):
+        result = await fetch_url("https://www.usda.gov/x/terms.pdf", settings=settings)
+
+    assert result.advisories == []
