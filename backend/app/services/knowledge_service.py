@@ -1831,6 +1831,9 @@ async def refresh_url_source(
         source.url_title = result.title or source.url_title
         source.status = "ready"
         source.error_message = None
+        # The fetch is what carries the caveat, so a successful fetch
+        # rewrites it: a clean refetch clears an earlier one.
+        source.warnings = list(result.advisories)
         source.last_refresh_outcome = currency.OUTCOME_UNCHANGED
         source.last_refresh_error = None
         await source.save()
@@ -1855,6 +1858,7 @@ async def refresh_url_source(
     source.content = raw_text[:500000]
     source.url_title = result.title or source.url_title
     source.truncated = bool(result.truncated)
+    source.warnings = list(result.advisories)
     source.chunk_count = chunk_count
     source.status = "ready"
     source.error_message = None
@@ -1905,6 +1909,9 @@ async def _ingest_url_source(
         source.content = raw_text[:500000]
         source.url_title = result.title
         source.truncated = bool(result.truncated)
+        # e.g. a fetched PDF whose hidden-text scrub could not run: the text
+        # is indexed, and the source row says what was not checked.
+        source.warnings = list(result.advisories)
 
         dm = _get_dm()
         chunk_count = await asyncio.to_thread(
@@ -1978,6 +1985,9 @@ async def ingest_text_into_source(
         # Caller-supplied text is chunked in full (dm.add_to_kb gets the whole
         # string), so re-ingesting here repairs any earlier fetch truncation.
         source.truncated = False
+        # Caller-supplied text never went through the fetcher's PDF scrub,
+        # so a fetch-time caveat no longer describes what is indexed.
+        source.warnings = []
         source.status = "ready"
         source.error_message = None
         currency.stamp_ingested(source, text)

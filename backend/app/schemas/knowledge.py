@@ -92,6 +92,12 @@ class KBSourceResponse(BaseModel):
     # URL source whose extracted text was cut off at the fetcher size cap:
     # "ready" but incomplete, so the UI warns instead of showing a clean check.
     truncated: bool = False
+    # URL source caveats recorded at fetch time that are not incompleteness
+    # (``hidden_text_unchecked``: a fetched PDF the hidden-text scrub could not
+    # inspect). Distinct from ``ingestion_warnings`` on purpose — that list
+    # means "only part of the document is indexed"; this one means "all of it
+    # is, and possibly more than the page shows". No UI badge yet.
+    warnings: list[str] = []
     # Document source whose document the pipeline recorded as only partly
     # converted (``partial_ocr``, ``sparse_text``): the same "ready but
     # incomplete" shape as ``truncated``, read live from the document.

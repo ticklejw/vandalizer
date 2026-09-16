@@ -1562,3 +1562,92 @@ class TestIngestionFidelityPapercuts:
 
         text = extract_text_from_xlsx(str(path))
         assert text.count("485000") == 1
+
+
+class TestArchiveInterceptionBeforeMarkItDown:
+    """#834: the #828 gate sits on the unknown-extension fallback, but
+    MarkItDown gets the file first — its zip converter walks archives and its
+    plain-text converter accepts whatever charset detection assigns *any*
+    charset to — so a .zip or an .exe could ingest as a "successfully
+    processed" document without the gated reader ever running.
+    """
+
+    def test_a_real_zip_is_refused_before_markitdown_reads_its_members(self, tmp_path):
+        import zipfile
+
+        import app.services.document_readers as dr
+
+        path = tmp_path / "bundle.zip"
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("notes.txt", "quarterly personnel costs: 485,000\n" * 20)
+        with pytest.raises(dr.DocumentReadError) as exc:
+            dr.extract_text_from_file(str(path), "zip")
+        assert "readable text" in str(exc.value)
+        assert "485,000" not in str(exc.value)
+
+    def test_an_mz_executable_with_an_unknown_extension_is_refused_by_magic(self, tmp_path):
+        """A textual body after the header would pass the density gate — the
+        leading bytes are what identify it."""
+        import app.services.document_readers as dr
+
+        path = tmp_path / "setup.dat"
+        path.write_bytes(b"MZ\x90\x00" + b"This program cannot be run in DOS mode.\r\n" * 40)
+        with pytest.raises(dr.DocumentReadError):
+            dr.extract_text_from_file(str(path), "dat")
+
+    def test_an_archive_extension_is_refused_whatever_its_bytes(self, tmp_path):
+        import app.services.document_readers as dr
+
+        path = tmp_path / "archive.tar"
+        path.write_bytes(b"plain text member\n" * 100)
+        with pytest.raises(dr.DocumentReadError):
+            dr.extract_text_from_file(str(path), "tar")
+
+    def test_zip_based_document_formats_are_not_caught_by_the_magic_check(self, tmp_path):
+        """A .docx IS a zip; only its extension separates it from a .zip."""
+        from app.services.document_readers import _looks_like_archive_or_executable
+
+        for ext in ("docx", "xlsx", "pptx", "odt", "epub"):
+            path = tmp_path / f"doc.{ext}"
+            path.write_bytes(b"PK\x03\x04" + b"\x00" * 60)
+            assert not _looks_like_archive_or_executable(str(path), ext), ext
+        path = tmp_path / "doc.zip"
+        path.write_bytes(b"PK\x03\x04" + b"\x00" * 60)
+        assert _looks_like_archive_or_executable(str(path), "zip")
+
+    def test_the_interception_is_not_a_cue_to_try_the_text_reader(self, tmp_path):
+        """The fallback used to catch every exception from MarkItDown and hand
+        the same bytes to the text reader; the refusal must be final."""
+        from unittest.mock import patch
+
+        import app.services.document_readers as dr
+
+        path = tmp_path / "bundle.zip"
+        path.write_bytes(b"PK\x03\x04" + b"a" * 4096)
+        with patch.object(dr, "read_text_file") as text_reader, \
+             pytest.raises(dr.DocumentReadError):
+            dr.extract_text_from_file(str(path), "zip")
+        text_reader.assert_not_called()
+
+    def test_markitdown_output_that_looks_binary_is_refused_for_an_unknown_extension(self, tmp_path):
+        """PlainTextConverter "succeeding" is no more proof of text than
+        latin-1 was; the converted output goes through the same gate."""
+        from unittest.mock import patch
+
+        import app.services.document_readers as dr
+
+        path = tmp_path / "blob.qqq"
+        path.write_bytes(b"irrelevant; the converter is stubbed")
+        with patch.object(dr, "convert_to_markdown", return_value="ab\x00cd" * 200), \
+             pytest.raises(dr.DocumentReadError):
+            dr.extract_text_from_file(str(path), "qqq")
+
+    def test_markitdown_text_output_for_an_unknown_extension_still_passes(self, tmp_path):
+        from unittest.mock import patch
+
+        import app.services.document_readers as dr
+
+        path = tmp_path / "notes.qqq"
+        path.write_bytes(b"irrelevant; the converter is stubbed")
+        with patch.object(dr, "convert_to_markdown", return_value="# Notes\n\nplain prose\n"):
+            assert "plain prose" in dr.extract_text_from_file(str(path), "qqq")

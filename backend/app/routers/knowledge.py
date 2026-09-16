@@ -291,6 +291,7 @@ def _source_response(
         error_message=s.error_message or "",
         chunk_count=s.chunk_count,
         truncated=bool(getattr(s, "truncated", False)),
+        warnings=list(getattr(s, "warnings", None) or []),
         ingestion_warnings=warnings,
         ingestion_warning_text=(
             "; ".join(INGESTION_WARNING_LABELS[c] for c in warnings) or None
