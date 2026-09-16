@@ -1,4 +1,4 @@
-"""Stable, human-readable IDs and provenance notes for auto-generated test queries.
+"""Human-readable IDs and provenance notes for auto-generated test queries.
 
 An imported test set carries its own IDs (``KBTestQuery.external_id``) and
 the importer preserves them as given, so a spreadsheet row can be tracked
@@ -10,15 +10,33 @@ Every auto-generated question now gets ``<KB-prefix>-AUTO-Q<nnn>`` — e.g.
 ``FCOI-AUTO-Q007`` — where the prefix is derived from the KB title and the
 number continues from the highest ``-AUTO-Q`` already on the KB, so
 regenerating never reuses an ID. Imported IDs are never touched.
+
+An ID is assigned once and never changes, but it is not deterministic: a
+regenerated set gets fresh numbers. IDs are written on the write paths only
+(generation and import); listing a KB's test queries never writes. A partial
+unique index on ``(knowledge_base_uuid, external_id)`` is the final arbiter
+between two concurrent writers, and ``dedupe_test_query_external_ids`` clears
+any duplicates from before that index existed so it can be built at startup.
 """
 
 from __future__ import annotations
 
 import datetime
+import logging
 import re
-from typing import Iterable, Optional
+from typing import Awaitable, Callable, Iterable, Optional
+
+from pymongo.errors import DuplicateKeyError
+
+logger = logging.getLogger(__name__)
 
 AUTO_ID_SUFFIX_RE = re.compile(r"-AUTO-Q(\d+)$")
+
+# A collision on write means another writer took the number between our
+# re-check and our write; the next number is free with overwhelming
+# likelihood. The cap only keeps a DuplicateKeyError on some *other* key
+# from spinning forever.
+_MAX_ID_COLLISION_RETRIES = 50
 
 # Words that add nothing to a prefix: "FCOI Knowledge Base" should read as
 # FCOI, not FKB.
@@ -81,8 +99,9 @@ class AutoQueryIdAllocator:
     ``allocate`` is pure: it continues from the IDs it was given. ``reserve``
     re-checks the KB before handing an ID out, so two writers that read the
     same IDs (a generation racing another generation, a backfill, or an
-    import) do not both mint the same number — there is no unique index on
-    ``external_id`` to catch that after the fact.
+    import) do not usually mint the same number. The unique index on
+    ``(knowledge_base_uuid, external_id)`` catches the race the re-check
+    cannot see; ``reserve_and_write`` turns that into "take the next number".
     """
 
     def __init__(self, prefix: str, existing_ids: Iterable[Optional[str]]):
@@ -112,6 +131,41 @@ class AutoQueryIdAllocator:
                 return candidate
 
 
+async def reserve_and_write(
+    allocator: AutoQueryIdAllocator,
+    row,
+    kb_uuid: str,
+    *,
+    write: Callable[[], Awaitable[object]],
+    exclude_uuid: Optional[str] = None,
+) -> str:
+    """Put a reserved ID on ``row`` and persist it with ``write``.
+
+    ``write`` is the row's own ``insert`` (a new generated question) or
+    ``save`` (a backfilled legacy one). When the unique index rejects the
+    write because another writer took the same number between our re-check
+    and our write, the next number is reserved and the write retried, so a
+    racing generation and import both finish with distinct IDs instead of
+    one of them failing. Returns the ID that was written.
+    """
+    for _ in range(_MAX_ID_COLLISION_RETRIES):
+        row.external_id = await allocator.reserve(kb_uuid, exclude_uuid=exclude_uuid)
+        try:
+            await write()
+        except DuplicateKeyError:
+            logger.info(
+                "Auto query ID %s on KB %s was taken between reserve and write; "
+                "retrying with the next number",
+                row.external_id, kb_uuid,
+            )
+            continue
+        return row.external_id
+    raise RuntimeError(
+        f"Could not find a free auto query ID on KB {kb_uuid} after "
+        f"{_MAX_ID_COLLISION_RETRIES} collisions"
+    )
+
+
 def auto_query_notes(
     *,
     source_names: Iterable[str],
@@ -134,6 +188,12 @@ def auto_query_notes(
 async def backfill_auto_query_ids(kb) -> int:
     """Give IDs to a KB's auto-generated queries that predate this scheme.
 
+    Runs on the write paths only — before a generation allocates its batch,
+    so legacy rows are numbered first and the new questions continue after
+    them, and before an import. Listing never calls it, so a read-only
+    member's page view writes nothing; a KB nobody generates or imports on
+    again simply shows no ID on its older rows.
+
     Deterministic — oldest first, continuing from the highest existing
     number — so two concurrent callers assign the same IDs to the same rows;
     an ID a concurrent generation took in the meantime is skipped.
@@ -154,6 +214,57 @@ async def backfill_auto_query_ids(kb) -> int:
     )
     missing.sort(key=lambda q: (q.created_at or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc), q.uuid))
     for q in missing:
-        q.external_id = await allocator.reserve(kb.uuid, exclude_uuid=q.uuid)
-        await q.save()
+        await reserve_and_write(allocator, q, kb.uuid, write=q.save, exclude_uuid=q.uuid)
     return len(missing)
+
+
+def _dedupe_sort_key(row: dict) -> tuple:
+    """Oldest first: by ``created_at`` when present, then by ObjectId (which
+    embeds its own creation time). Naive and aware datetimes are both reduced
+    to a timestamp so a mixed collection cannot raise on comparison."""
+    created = row.get("created_at")
+    return (
+        created is None,
+        created.timestamp() if isinstance(created, datetime.datetime) else 0.0,
+        str(row.get("_id")),
+    )
+
+
+async def dedupe_test_query_external_ids(collection) -> int:
+    """Clear ``external_id`` on all but the oldest row of each duplicated
+    ``(knowledge_base_uuid, external_id)`` pair.
+
+    Runs before Beanie builds the partial unique index on that pair: building
+    a unique index over data that already contains duplicates fails, and a
+    failed index build at init would crash every process at startup. The
+    oldest row keeps the ID — it is the one earlier validation runs and
+    exports cited — and each cleared row is logged with its KB, the ID, and
+    the affected query uuids so an operator can re-import or regenerate.
+    ``collection`` is the raw Motor collection, because this runs before the
+    ODM is initialised. Returns the number of rows whose ID was cleared.
+    """
+    pipeline = [
+        {"$match": {"external_id": {"$type": "string"}}},
+        {"$group": {
+            "_id": {"kb": "$knowledge_base_uuid", "external_id": "$external_id"},
+            "rows": {"$push": {"_id": "$_id", "uuid": "$uuid", "created_at": "$created_at"}},
+            "count": {"$sum": 1},
+        }},
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+    cleared = 0
+    async for group in collection.aggregate(pipeline):
+        rows = sorted(group["rows"], key=_dedupe_sort_key)
+        keep, losers = rows[0], rows[1:]
+        await collection.update_many(
+            {"_id": {"$in": [r["_id"] for r in losers]}},
+            {"$set": {"external_id": None}},
+        )
+        logger.warning(
+            "KB %s: test-query ID %r was on %d rows; kept it on query %s and "
+            "cleared it from %s so the unique index can be built",
+            group["_id"]["kb"], group["_id"]["external_id"], len(rows),
+            keep.get("uuid"), [r.get("uuid") for r in losers],
+        )
+        cleared += len(losers)
+    return cleared
