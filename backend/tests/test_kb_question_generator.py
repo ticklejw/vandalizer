@@ -326,6 +326,7 @@ async def test_generate_end_to_end_persist_false():
     with patch.object(kb_question_generator, "KnowledgeBase") as KB, \
          patch.object(kb_question_generator, "KnowledgeBaseSource") as KBS, \
          patch.object(kb_question_generator, "KBTestQuery", side_effect=make_tq), \
+         patch.object(kb_question_generator, "backfill_auto_query_ids", new=AsyncMock(return_value=0)), \
          patch.object(KBQuestionGenerator, "_existing_external_ids", new=AsyncMock(return_value=[])), \
          patch.object(KBQuestionGenerator, "_sample_chunks", return_value=sampled), \
          patch.object(kb_question_generator, "get_user_model_name", new=AsyncMock(return_value="test-model")), \
@@ -355,8 +356,16 @@ async def test_generate_end_to_end_persist_false():
     assert "(quick coverage, model test-model)" in tq.notes
 
 
-def _run_generate(payload: dict, *, sampled, existing_ids, title="Doc KB", persist=False):
-    """Drive generate() with a canned LLM payload; returns the constructed rows."""
+def _run_generate(
+    payload: dict, *, sampled, existing_ids, title="Doc KB", persist=False,
+    backfill=None, existing_ids_reader=None, insert_side_effect=None,
+):
+    """Drive generate() with a canned LLM payload; returns the constructed rows.
+
+    ``backfill`` / ``existing_ids_reader`` replace the legacy-ID backfill and
+    the KB's ID read (both AsyncMocks by default) so a test can assert on
+    their ordering; ``insert_side_effect`` is handed to every row's insert.
+    """
     fake_kb = MagicMock()
     fake_kb.uuid = "kb-1"
     fake_kb.title = title
@@ -366,12 +375,17 @@ def _run_generate(payload: dict, *, sampled, existing_ids, title="Doc KB", persi
     fake_agent = MagicMock()
     fake_agent.run = AsyncMock(return_value=fake_run)
     constructed = []
+    backfill = backfill if backfill is not None else AsyncMock(return_value=0)
+    # ``_existing_external_ids`` is a staticmethod; a plain coroutine function
+    # patched onto the class would be bound and receive ``self``.
+    existing_ids_reader = staticmethod(existing_ids_reader) if existing_ids_reader is not None \
+        else AsyncMock(return_value=existing_ids)
 
     def make_tq(**kwargs):
         m = MagicMock()
         for k, v in kwargs.items():
             setattr(m, k, v)
-        m.insert = AsyncMock()
+        m.insert = AsyncMock(side_effect=insert_side_effect)
         constructed.append(m)
         return m
 
@@ -379,7 +393,8 @@ def _run_generate(payload: dict, *, sampled, existing_ids, title="Doc KB", persi
         with patch.object(kb_question_generator, "KnowledgeBase") as KB, \
              patch.object(kb_question_generator, "KnowledgeBaseSource") as KBS, \
              patch.object(kb_question_generator, "KBTestQuery", side_effect=make_tq), \
-             patch.object(KBQuestionGenerator, "_existing_external_ids", new=AsyncMock(return_value=existing_ids)), \
+             patch.object(kb_question_generator, "backfill_auto_query_ids", new=backfill), \
+             patch.object(KBQuestionGenerator, "_existing_external_ids", new=existing_ids_reader), \
              patch.object(KBQuestionGenerator, "_sample_chunks", return_value=sampled), \
              patch.object(kb_question_generator, "get_user_model_name", new=AsyncMock(return_value="test-model")), \
              patch.object(kb_question_generator, "get_agent_model", return_value=MagicMock()), \
@@ -436,6 +451,62 @@ async def test_generate_persisted_rows_reserve_ids_against_the_kb():
     tq_model.find_one.assert_not_awaited()
 
 
+_ONE_QUESTION = {"questions": [
+    {"query": "Q1?", "expected_answer": "A1.", "expected_source_labels": ["Doc A"], "source_chunk_ids": ["src-1_chunk_0"]},
+]}
+
+
+@pytest.mark.asyncio
+async def test_persisted_generation_numbers_legacy_rows_before_reading_ids_for_its_batch():
+    """#886: the backfill moved off the GET onto the write paths. It must run
+    before the allocator reads the KB's IDs, so pre-#876 rows take the low
+    numbers and this batch continues after them; a preview never writes."""
+    events = []
+
+    async def backfill(kb):
+        events.append(("backfill", kb.uuid))
+        return 1
+
+    async def read_ids(kb_uuid):
+        events.append(("read_ids", kb_uuid))
+        return ["DOC-AUTO-Q001"]  # what the backfill just wrote
+
+    tq_model = MagicMock()
+    tq_model.find_one = AsyncMock(return_value=None)
+    with patch("app.models.kb_test_query.KBTestQuery", tq_model):
+        created = await _run_generate(
+            _ONE_QUESTION, sampled=_TWO_CHUNKS, existing_ids=[], persist=True,
+            backfill=backfill, existing_ids_reader=read_ids,
+        )
+    assert events == [("backfill", "kb-1"), ("read_ids", "kb-1")]
+    assert [q.external_id for q in created] == ["DOC-AUTO-Q002"]
+
+    events.clear()
+    await _run_generate(
+        _ONE_QUESTION, sampled=_TWO_CHUNKS, existing_ids=[], persist=False,
+        backfill=backfill, existing_ids_reader=read_ids,
+    )
+    assert events == [("read_ids", "kb-1")]
+
+
+@pytest.mark.asyncio
+async def test_persisted_generation_takes_the_next_number_when_the_insert_collides():
+    """Two writers can both pass the pre-write re-check; the unique index
+    rejects the second insert and the row is retried with the next number
+    rather than failing the whole generation (#886)."""
+    from pymongo.errors import DuplicateKeyError
+
+    tq_model = MagicMock()
+    tq_model.find_one = AsyncMock(return_value=None)
+    with patch("app.models.kb_test_query.KBTestQuery", tq_model):
+        created = await _run_generate(
+            _ONE_QUESTION, sampled=_TWO_CHUNKS, existing_ids=[], persist=True,
+            insert_side_effect=[DuplicateKeyError("E11000"), None],
+        )
+    assert [q.external_id for q in created] == ["DOC-AUTO-Q002"]
+    assert created[0].insert.await_count == 2
+
+
 @pytest.mark.asyncio
 async def test_generate_fills_source_from_cited_chunks_when_labels_are_invented():
     """The Source column is never blank for a chunk-grounded question."""
@@ -481,6 +552,7 @@ async def test_generate_caps_results_to_target_count():
     with patch.object(kb_question_generator, "KnowledgeBase") as KB, \
          patch.object(kb_question_generator, "KnowledgeBaseSource") as KBS, \
          patch.object(kb_question_generator, "KBTestQuery", side_effect=make_tq), \
+         patch.object(kb_question_generator, "backfill_auto_query_ids", new=AsyncMock(return_value=0)), \
          patch.object(KBQuestionGenerator, "_existing_external_ids", new=AsyncMock(return_value=[])), \
          patch.object(KBQuestionGenerator, "_sample_chunks", return_value=sampled), \
          patch.object(kb_question_generator, "get_user_model_name", new=AsyncMock(return_value="test-model")), \

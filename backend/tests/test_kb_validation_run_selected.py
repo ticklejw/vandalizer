@@ -86,7 +86,10 @@ async def test_selected_queries_run_alone_and_persist_as_a_smoke_test():
 
     assert sorted(t.uuid for t in judged) == ["q1", "q3"]
     assert result["num_test_queries"] == 2
-    assert result["query_selection"] == {"selected": 2, "total": 3}
+    # ``selected`` is what ran, ``requested`` what was asked for — the two
+    # differ here because "nope" is not a query of this KB (the route refuses
+    # such a selection up front; the service still records both counts).
+    assert result["query_selection"] == {"selected": 2, "requested": 3, "total": 3}
     # Tagged, so nothing that reads "the latest run" as the KB's quality
     # picks it up — and History can label it.
     assert persisted["source"] == SMOKE_TEST_SOURCE
