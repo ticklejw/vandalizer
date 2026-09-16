@@ -1241,3 +1241,290 @@ class TestOcrOutageReachesTheRetryMachinery:
         # Not the generic extraction-failed wording.
         assert "Text extraction failed" not in written["error_message"]
         assert notify.called
+
+
+# ---------------------------------------------------------------------------
+# reap_stuck_documents
+# ---------------------------------------------------------------------------
+
+
+class _FakeSmartDocuments:
+    """Just enough of a pymongo collection to evaluate the reaper's queries.
+
+    The age cutoff lives in the Mongo filter, so a MagicMock that returns a
+    canned list cannot tell a 10-minute-old lock from a 3-hour-old one. This
+    evaluates ``$in``, ``$ne``, ``$lt``, ``$or`` and equality (``None``
+    matching a null *or missing* field, as Mongo does) against real dicts.
+    """
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.update_filters = []
+
+    @staticmethod
+    def _field_matches(row, key, cond):
+        present = key in row
+        value = row.get(key)
+        if isinstance(cond, dict):
+            for op, arg in cond.items():
+                if op == "$in":
+                    if value not in arg:
+                        return False
+                elif op == "$ne":
+                    if value == arg:
+                        return False
+                elif op == "$lt":
+                    if not present or value is None or not value < arg:
+                        return False
+                else:
+                    raise NotImplementedError(op)
+            return True
+        if cond is None:
+            return not present or value is None
+        return value == cond
+
+    def _matches(self, row, query):
+        for key, cond in query.items():
+            if key == "$or":
+                if not any(self._matches(row, branch) for branch in cond):
+                    return False
+            elif not self._field_matches(row, key, cond):
+                return False
+        return True
+
+    def find(self, query, projection=None):
+        return [dict(r) for r in self.rows if self._matches(r, query)]
+
+    def find_one(self, query, projection=None):
+        hits = self.find(query)
+        return hits[0] if hits else None
+
+    def update_one(self, query, update):
+        self.update_filters.append(query)
+        for row in self.rows:
+            if self._matches(row, query):
+                row.update(update["$set"])
+                return MagicMock(matched_count=1, modified_count=1)
+        return MagicMock(matched_count=0, modified_count=0)
+
+
+class TestReapStuckDocuments:
+    """A worker SIGKILLed mid-extraction leaves processing=True,
+    task_status="extracting", raw_text="" — the shape the lock is taken in.
+    The original sweep only re-joins a chain that *finished* extracting, so
+    such a document said "Reading text…" forever (#812)."""
+
+    def _db(self, rows):
+        db = MagicMock()
+        db.smart_document = _FakeSmartDocuments(rows)
+        db.knowledge_base_sources.find.return_value = []
+        return db
+
+    @staticmethod
+    def _stuck(uuid, **overrides):
+        import datetime as _dt
+
+        row = {
+            "uuid": uuid,
+            "title": f"{uuid}.pdf",
+            "user_id": "owner1",
+            "processing": True,
+            "task_status": "extracting",
+            "task_id": "celery-task",
+            "raw_text": "",
+            "created_at": _dt.datetime.now() - _dt.timedelta(hours=3),
+            "updated_at": _dt.datetime.now() - _dt.timedelta(hours=3),
+        }
+        row.update(overrides)
+        return row
+
+    def _run(self, db):
+        from app.tasks.document_tasks import reap_stuck_documents
+
+        with patch("app.tasks.document_tasks.get_sync_db", return_value=db), \
+             patch("app.tasks.document_tasks.update_document_fields") as update_step, \
+             patch("app.tasks.document_tasks._notify_document_processing_failed") as notify, \
+             patch("app.tasks.document_tasks._resume_pending_kb_sources") as resume:
+            reap_stuck_documents.run()
+        return update_step, notify, resume
+
+    def test_lock_older_than_the_window_is_marked_failed_with_a_retry_hint(self):
+        from app.tasks.document_tasks import _EXTRACTION_ABANDONED_MESSAGE
+
+        row = self._stuck("doc-dead")
+        db = self._db([row])
+
+        update_step, notify, resume = self._run(db)
+
+        assert row["processing"] is False
+        assert row["task_status"] == "error"
+        assert row["task_id"] is None
+        assert row["error_message"] == _EXTRACTION_ABANDONED_MESSAGE
+        assert "Retry the extraction" in row["error_message"]
+        # Failed, not completed: the chain's update step would have stamped
+        # "complete" over an empty document and re-fired folder automations.
+        update_step.delay.assert_not_called()
+        notify.assert_called_once_with(db, "doc-dead", _EXTRACTION_ABANDONED_MESSAGE)
+        resume.assert_called_once_with(db, "doc-dead", extraction_failed=True)
+
+    def test_lock_inside_the_window_is_left_alone(self):
+        import datetime as _dt
+
+        row = self._stuck(
+            "doc-live",
+            updated_at=_dt.datetime.now() - _dt.timedelta(minutes=10),
+        )
+        db = self._db([row])
+
+        update_step, notify, resume = self._run(db)
+
+        assert row["processing"] is True
+        assert row["task_status"] == "extracting"
+        assert "error_message" not in row
+        update_step.delay.assert_not_called()
+        notify.assert_not_called()
+        resume.assert_not_called()
+
+    def test_row_without_a_lock_stamp_is_aged_by_its_upload_time(self):
+        """Rows written before the lock stamped updated_at have no clock of
+        their own; an old upload still stranded is reaped, a fresh one is
+        not."""
+        import datetime as _dt
+
+        old = self._stuck("doc-old-unstamped")
+        del old["updated_at"]
+        fresh = self._stuck(
+            "doc-fresh-unstamped",
+            created_at=_dt.datetime.now() - _dt.timedelta(minutes=10),
+        )
+        del fresh["updated_at"]
+        db = self._db([old, fresh])
+
+        _, notify, _ = self._run(db)
+
+        assert old["task_status"] == "error"
+        assert old["processing"] is False
+        assert fresh["task_status"] == "extracting"
+        assert fresh["processing"] is True
+        assert notify.call_count == 1
+
+    def test_write_is_guarded_on_the_lock_it_matched(self):
+        """A document that completed (or was re-locked by a retry) between
+        the find and the write must not be flipped to error under it."""
+        row = self._stuck("doc-racing")
+        db = self._db([row])
+
+        # The row the find returns is a copy; mutate the store between the
+        # find and the write the way a finishing worker would.
+        original_find = db.smart_document.find
+
+        def find_then_finish(query, projection=None):
+            hits = original_find(query, projection)
+            if query.get("processing") is True and hits:
+                row["processing"] = False
+                row["task_status"] = "complete"
+                row["raw_text"] = "the text"
+            return hits
+
+        db.smart_document.find = find_then_finish
+
+        _, notify, resume = self._run(db)
+
+        assert row["task_status"] == "complete"
+        assert "error_message" not in row
+        notify.assert_not_called()
+        resume.assert_not_called()
+        guard = db.smart_document.update_filters[-1]
+        assert guard["processing"] is True
+        assert guard["updated_at"] == row["updated_at"]
+
+    def test_soft_deleted_lock_is_not_reaped(self):
+        row = self._stuck("doc-trashed", soft_deleted=True)
+        db = self._db([row])
+
+        _, notify, _ = self._run(db)
+
+        assert row["task_status"] == "extracting"
+        notify.assert_not_called()
+
+    def test_finished_but_unadvanced_document_still_gets_the_update_step(self):
+        """The original sweep: processing=False with text but an in-progress
+        stage means the chain never ran update_document_fields. That path is
+        unchanged and must not be confused with the dead-worker one."""
+        finished = self._stuck(
+            "doc-finished", processing=False, raw_text="extracted text",
+        )
+        dead = self._stuck("doc-dead")
+        db = self._db([finished, dead])
+
+        update_step, notify, _ = self._run(db)
+
+        update_step.delay.assert_called_once_with("doc-finished")
+        assert finished["task_status"] == "extracting"  # the update step sets it
+        assert dead["task_status"] == "error"
+        notify.assert_called_once()
+
+    def test_one_bad_row_does_not_stop_the_sweep(self):
+        first = self._stuck("doc-a")
+        second = self._stuck("doc-b")
+        db = self._db([first, second])
+
+        from app.tasks.document_tasks import reap_stuck_documents
+
+        with patch("app.tasks.document_tasks.get_sync_db", return_value=db), \
+             patch("app.tasks.document_tasks.update_document_fields"), \
+             patch("app.tasks.document_tasks._notify_document_processing_failed",
+                   side_effect=[RuntimeError("bell down"), None]) as notify, \
+             patch("app.tasks.document_tasks._resume_pending_kb_sources"):
+            reap_stuck_documents.run()  # must not raise
+
+        assert notify.call_count == 2
+        assert first["task_status"] == "error"
+        assert second["task_status"] == "error"
+
+
+class TestExtractionStalenessIsOneDefinition:
+    """The retry route and the reaper must age the same lock with the same
+    clock (#835's complaint, applied to documents). The window is derived
+    from Celery's hard time limit, which the extraction task inherits."""
+
+    def test_window_is_twice_the_hard_time_limit(self):
+        import datetime as _dt
+
+        from app.celery_app import celery
+        from app.services.extraction_staleness import (
+            EXTRACTION_STALE_AFTER,
+            EXTRACTION_TASK_HARD_TIME_LIMIT_SECONDS,
+        )
+        from app.tasks.document_tasks import perform_extraction_and_update
+
+        # The extraction task sets no limit of its own, so the global one is
+        # what SIGKILLs it; if someone gives it a longer one, this pins the
+        # constant to follow.
+        hard_limit = perform_extraction_and_update.time_limit or celery.conf.task_time_limit
+        assert EXTRACTION_TASK_HARD_TIME_LIMIT_SECONDS == hard_limit
+        assert EXTRACTION_STALE_AFTER == _dt.timedelta(seconds=2 * hard_limit)
+
+    def test_route_and_reaper_share_the_constant(self):
+        from app.routers import documents as documents_router
+        from app.services.extraction_staleness import EXTRACTION_STALE_AFTER
+
+        assert documents_router._EXTRACTION_STALE_AFTER is EXTRACTION_STALE_AFTER
+
+    def test_helper_falls_back_to_created_at_when_unstamped(self):
+        import datetime as _dt
+
+        from app.services.extraction_staleness import (
+            EXTRACTION_STALE_AFTER,
+            extraction_is_stale,
+        )
+
+        now = _dt.datetime.now()
+        old = now - EXTRACTION_STALE_AFTER - _dt.timedelta(minutes=1)
+        recent = now - _dt.timedelta(minutes=10)
+
+        assert extraction_is_stale(old, recent, now=now) is True
+        assert extraction_is_stale(recent, old, now=now) is False
+        assert extraction_is_stale(None, old, now=now) is True
+        assert extraction_is_stale(None, recent, now=now) is False
+        assert extraction_is_stale(None, None, now=now) is True
