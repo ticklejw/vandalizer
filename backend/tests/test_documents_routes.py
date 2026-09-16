@@ -70,6 +70,7 @@ def _make_document(
     doc.processing = processing
     doc.extraction_nonletter_ratio = extraction_nonletter_ratio
     doc.updated_at = datetime.now() if updated_at is None else updated_at
+    doc.created_at = doc.updated_at
     doc.save = AsyncMock()
     return doc
 
@@ -502,10 +503,15 @@ class TestRetryExtractionRoute:
         shape this route writes and no sweeper repairs; once the lock is
         older than the window the worker is presumed dead, and the route
         must not be the reason the document stays at "Reading text…"."""
+        from app.services.extraction_staleness import EXTRACTION_STALE_AFTER
+
+        # One minute past the shared window: the same age the reap_stuck
+        # sweep marks the document failed at, so route and reaper can never
+        # disagree about whether this lock is alive.
         doc = _make_document(
             doc_uuid="doc-1", user_id="owner1",
             task_status="extracting", processing=True,
-            updated_at=datetime.now() - timedelta(hours=2),
+            updated_at=datetime.now() - EXTRACTION_STALE_AFTER - timedelta(minutes=1),
         )
         resp, mock_dispatch, _ = await self._post(client, doc)
 
@@ -514,6 +520,23 @@ class TestRetryExtractionRoute:
         doc.save.assert_awaited_once()
         # The new lock is stamped, so a second retry inside the window is a 409.
         assert datetime.now() - doc.updated_at < timedelta(minutes=1)
+
+    @pytest.mark.asyncio
+    async def test_in_flight_extraction_inside_the_window_is_still_rejected(self, client):
+        """A lock younger than the shared window is presumed live — the
+        worker may still be reading a large OCR job — so a retry would put
+        a second extraction on the same document."""
+        from app.services.extraction_staleness import EXTRACTION_STALE_AFTER
+
+        doc = _make_document(
+            doc_uuid="doc-1", user_id="owner1",
+            task_status="extracting", processing=True,
+            updated_at=datetime.now() - EXTRACTION_STALE_AFTER + timedelta(minutes=5),
+        )
+        resp, mock_dispatch, _ = await self._post(client, doc)
+
+        assert resp.status_code == 409
+        mock_dispatch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stalled_in_progress_status_is_rejected_too(self, client):

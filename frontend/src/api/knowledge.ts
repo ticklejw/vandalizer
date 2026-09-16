@@ -247,8 +247,10 @@ export type KBValidationResult = {
   num_sources: number
   mode?: KBValidationMode
   judge_model?: string | null
-  /** Set when the run covered hand-picked queries only ("Run selected"). */
-  query_selection?: { selected: number; total: number } | null
+  /** Set when the run covered hand-picked queries only ("Run selected").
+   *  ``selected`` is what ran; ``requested`` (newer runs) is what was asked
+   *  for — the route now refuses a mismatch, so they agree on new rows. */
+  query_selection?: { selected: number; requested?: number; total: number } | null
   /** The model that generated the graded answers (absent on older runs). */
   answer_model?: string | null
   /** Set when the KB's applied override named a model System Config no

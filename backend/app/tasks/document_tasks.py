@@ -1172,17 +1172,36 @@ def perform_semantic_ingestion(self, raw_text: str, document_uuid: str, user_id:
 _IN_PROGRESS_TASK_STATUSES = ["layout", "extracting", "ocr", "security", "readying"]
 
 
+# What the library shows for a document whose extraction worker died with the
+# lock held. Deliberately says "stopped", not "failed to read": the file is
+# probably fine, and the fix is the Retry button, which the same staleness
+# window has already unlocked.
+_EXTRACTION_ABANDONED_MESSAGE = (
+    "Text extraction stopped without finishing — the worker was likely "
+    "restarted or ran out of memory mid-read. Retry the extraction."
+)
+
+
 @celery_app.task(bind=True, name="tasks.document.reap_stuck")
 def reap_stuck_documents(self) -> None:
     """Self-heal documents whose task_status is stuck in an in-progress stage.
 
-    Failure mode this handles: extraction finished (processing=False, raw_text
-    populated) but task_status never advanced to "complete" because the caller
-    dispatched the extraction task without chaining update_document_fields.
-    The frontend then shows these docs as "Reading text…" indefinitely.
+    Two failure modes, two sweeps:
 
-    Acts as a backstop against pipeline-chaining bugs; the fix in the caller
-    is still preferred.
+    1. Extraction finished (processing=False, raw_text populated) but
+       task_status never advanced to "complete" because the caller dispatched
+       the extraction task without chaining update_document_fields. The
+       chain is re-joined by dispatching the update step.
+    2. Extraction never finished: the worker was SIGKILLed mid-read (OOM, a
+       deploy, the hard time limit), leaving processing=True,
+       task_status="extracting", raw_text="" — the exact shape the lock is
+       taken in, so no completion write ever follows. Sweep 1 cannot see
+       these (processing is True and raw_text is empty), and until #887
+       stamped ``updated_at`` on the lock there was nothing to age against.
+       The document is marked failed with a retry hint.
+
+    Either way the frontend showed "Reading text…" indefinitely. Both act as
+    backstops; the fix in the caller / a worker that stays alive is preferred.
     """
     db = get_sync_db()
 
@@ -1196,10 +1215,100 @@ def reap_stuck_documents(self) -> None:
         {"uuid": 1},
     ))
 
-    if not orphans:
-        return
-
     for doc in orphans:
         update_document_fields.delay(doc["uuid"])
 
-    logger.info("Reaped %d stuck document(s) — dispatched update step", len(orphans))
+    if orphans:
+        logger.info(
+            "Reaped %d stuck document(s) — dispatched update step", len(orphans),
+        )
+
+    _reap_abandoned_extractions(db)
+
+
+def _reap_abandoned_extractions(db) -> int:
+    """Sweep 2 of reap_stuck_documents: fail locks whose worker is dead.
+
+    Returns the number of documents flipped to error.
+    """
+    from app.services.extraction_staleness import EXTRACTION_STALE_AFTER
+
+    # Naive local time on purpose: it is what perform_extraction_and_update
+    # and the retry route stamp into updated_at, and what the model's
+    # default_factory writes into created_at, so the cutoff compares like
+    # with like. (The workflow-run reaper uses aware UTC because its writers
+    # do.)
+    cutoff = datetime.datetime.now() - EXTRACTION_STALE_AFTER
+
+    abandoned = list(db.smart_document.find(
+        {
+            "processing": True,
+            "task_status": {"$in": _IN_PROGRESS_TASK_STATUSES},
+            "soft_deleted": {"$ne": True},
+            "$or": [
+                {"updated_at": {"$lt": cutoff}},
+                # ``None`` matches a null or missing field: rows that predate
+                # the lock stamp fall into this gentler sweep, aged by their
+                # upload time instead, the way the workflow reaper treats a
+                # run with no heartbeat.
+                {"updated_at": None, "created_at": {"$lt": cutoff}},
+            ],
+        },
+        {"uuid": 1, "updated_at": 1},
+    ))
+
+    reaped = 0
+    for doc in abandoned:
+        document_uuid = doc["uuid"]
+        try:
+            # Flip to error; never fake completion. update_document_fields is
+            # deliberately NOT used here: it forces task_status="complete" and
+            # re-runs _check_folder_watch_automations, which has no dedup, so
+            # a reaped document would be presented as read (with no text) and
+            # would re-fire every folder-watch automation on its folder.
+            #
+            # The filter repeats processing=True and the updated_at we
+            # matched on so a worker that finished (or a retry that re-took
+            # the lock) between the find and this write is left alone —
+            # either changes at least one of the two.
+            result = db.smart_document.update_one(
+                {
+                    "uuid": document_uuid,
+                    "processing": True,
+                    "updated_at": doc.get("updated_at"),
+                },
+                {"$set": {
+                    "processing": False,
+                    "task_status": "error",
+                    "task_id": None,
+                    "error_message": _EXTRACTION_ABANDONED_MESSAGE,
+                }},
+            )
+            if not result.matched_count:
+                continue
+            reaped += 1
+            # Same bell as every other terminal extraction error; the sweep
+            # is the final attempt by definition, and the notifier never
+            # raises.
+            _notify_document_processing_failed(
+                db, document_uuid, _EXTRACTION_ABANDONED_MESSAGE,
+            )
+            # KB sources parked on this document (see
+            # knowledge_service._ingest_document_source) would otherwise wait
+            # forever for an extraction that is never going to finish. This
+            # is the error-path call update_document_fields makes, which
+            # reads the error_message written above.
+            _resume_pending_kb_sources(db, document_uuid, extraction_failed=True)
+        except Exception:
+            # One bad row must not stop the sweep for the rest.
+            logger.exception(
+                "Failed to reap abandoned extraction for document %s", document_uuid,
+            )
+
+    if reaped:
+        logger.info(
+            "Reaped %d document(s) whose extraction worker died mid-read "
+            "— marked failed with a retry hint",
+            reaped,
+        )
+    return reaped
