@@ -1725,7 +1725,15 @@ async def run_kb_validation(
         test_queries = [q for q in test_queries if q.uuid in wanted]
         if not test_queries:
             raise ValueError("None of the selected test queries belong to this knowledge base")
-        query_selection = {"selected": len(test_queries), "total": total}
+        # ``selected`` is what actually ran (existing readers: History's
+        # "selected n/N", exports); ``requested`` is what the caller asked for,
+        # so a selection that shrank because uuids were unknown is visible in
+        # the record rather than silently reported as the smaller run.
+        query_selection = {
+            "selected": len(test_queries),
+            "requested": len(query_uuids),
+            "total": total,
+        }
 
     health, coverage = await asyncio.gather(health_task, coverage_task)
 

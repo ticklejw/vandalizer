@@ -2817,6 +2817,44 @@ class TestValidateSelectedQueries:
         assert "belong" in resp.json()["detail"]
         task.delay.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_selection_over_the_cap_is_a_400_before_any_lookup(self, client):
+        from app.routers.knowledge import _VALIDATE_SELECTED_MAX
+
+        too_many = [f"q-{i}" for i in range(_VALIDATE_SELECTED_MAX + 1)]
+        resp, find, task = await self._post(client, {"async": True, "query_uuids": too_many})
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert str(_VALIDATE_SELECTED_MAX) in detail
+        assert str(_VALIDATE_SELECTED_MAX + 1) in detail
+        # Rejected on size alone — no ``$in`` query of that length hits Mongo.
+        find.assert_not_called()
+        task.delay.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_selection_exactly_at_the_cap_is_accepted(self, client):
+        from app.routers.knowledge import _VALIDATE_SELECTED_MAX
+
+        at_cap = [f"q-{i}" for i in range(_VALIDATE_SELECTED_MAX)]
+        resp, _find, task = await self._post(
+            client, {"async": True, "query_uuids": at_cap}, owned=_VALIDATE_SELECTED_MAX,
+        )
+        assert resp.status_code == 200
+        task.delay.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_partially_stale_selection_is_a_400_naming_the_missing_count(self, client):
+        # 5 requested, only 2 still exist on this KB: refuse rather than run a
+        # quietly smaller smoke test.
+        resp, _find, task = await self._post(
+            client, {"async": True, "query_uuids": ["q-1", "q-2", "q-3", "q-4", "q-5"]}, owned=2,
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "3 of the 5 selected test queries no longer exist" in detail
+        assert "refresh" in detail
+        task.delay.assert_not_called()
+
 
 class TestValidationRunExport:
     """GET /{uuid}/validation-runs/{run_uuid}/export — per-query results."""
