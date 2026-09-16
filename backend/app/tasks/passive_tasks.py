@@ -417,13 +417,20 @@ def execute_workflow_passive(self, trigger_event_id: str) -> dict:
         )
 
         # Create WorkflowResult
+        # The run records which automation and trigger event produced it, so
+        # a reaper that finds it dead later can tell the person who set the
+        # schedule (reap_stale_workflow_runs_task) — the workflow's owner may
+        # be someone else entirely.
+        trigger_ctx = event.get("trigger_context") or {}
         result_doc = {
             "workflow": workflow["_id"],
             "session_id": uuid4().hex,
             "status": "running",
             "trigger_type": event.get("trigger_type"),
             "is_passive": True,
-            "input_context": event.get("trigger_context") or {},
+            "automation_id": trigger_ctx.get("automation_id") or None,
+            "trigger_event_id": str(event["_id"]),
+            "input_context": trigger_ctx,
             "created_at": now,
         }
         result_id = db.workflow_result.insert_one(result_doc).inserted_id
