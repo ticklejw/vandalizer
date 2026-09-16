@@ -334,6 +334,47 @@ def test_an_older_run_still_falls_back_to_the_live_test_set():
     assert rows[0]["external_id"] == "OLD-1"
 
 
+def test_a_recorded_note_wins_over_a_later_edit_to_the_live_query():
+    """``notes`` follows the same rule as external_id: what the run recorded
+    is what the export shows, so editing the note afterwards does not rewrite
+    history in the export of an older run (#886)."""
+    from app.services.kb_validation_export import build_kb_validation_results_export
+
+    vr = SimpleNamespace(
+        uuid="run-3",
+        created_at=None,
+        score=70.0,
+        model="judge-model",
+        run_type="full",
+        result_snapshot={
+            "retrieval_precision": {
+                "details": [{
+                    "query_uuid": "q-1",
+                    "query": "Old question?",
+                    "notes": "Auto-generated 2026-09-09 from Doc A (quick coverage).",
+                    "precision": 0.5,
+                }],
+            },
+        },
+    )
+    live = [SimpleNamespace(
+        uuid="q-1", query="Old question?", expected_answer="A", external_id="OLD-1",
+        category="factual", expected_source_labels=[],
+        notes="Reviewer rewrote this note after the run",
+    )]
+
+    _payload, _meta, rows = build_kb_validation_results_export(
+        kb=SimpleNamespace(uuid="kb-1", title="KB", tags=[], total_sources=1, total_chunks=2),
+        vr=vr,
+        test_queries=live,
+        catalog_version=None,
+        exported_by_user_id="u1",
+        exported_at="2026-08-20T00:00:00Z",
+    )
+
+    assert rows[0]["notes"] == "Auto-generated 2026-09-09 from Doc A (quick coverage)."
+
+
 # ---------------------------------------------------------------------------
 # The overall score is a composite; the export must say what it is made of so
 # nobody reads it as the judge's answer accuracy.

@@ -2,10 +2,12 @@
 auto-generated questions with imported sets — ID, category, source, notes)."""
 
 import datetime
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from app.services import kb_test_query_ids as ids
 from app.services.kb_test_query_ids import (
@@ -13,8 +15,10 @@ from app.services.kb_test_query_ids import (
     auto_query_id,
     auto_query_notes,
     backfill_auto_query_ids,
+    dedupe_test_query_external_ids,
     kb_id_prefix,
     next_auto_query_number,
+    reserve_and_write,
 )
 
 
@@ -163,3 +167,181 @@ async def test_backfill_is_a_no_op_when_every_auto_query_has_an_id():
 def test_module_exposes_the_regex_the_ui_documents():
     assert ids.AUTO_ID_SUFFIX_RE.search("ECR-AUTO-Q042").group(1) == "042"
     assert ids.AUTO_ID_SUFFIX_RE.search("SUB-002") is None
+
+
+# ---------------------------------------------------------------------------
+# The unique index is the arbiter the pre-write re-check cannot be (#886).
+# A DuplicateKeyError on the write means "another writer got there between
+# our re-check and our write" — take the next number, do not fail the batch.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_takes_the_next_number_when_the_unique_index_rejects_the_save():
+    legacy = _row("a1", True)
+    # First save collides (a concurrent generation inserted Q001 after our
+    # find_one said it was free); the second, with Q002, lands.
+    legacy.save = AsyncMock(side_effect=[DuplicateKeyError("E11000 duplicate key"), None])
+    kb = SimpleNamespace(uuid="kb-1", title="FCOI")
+
+    with patch("app.models.kb_test_query.KBTestQuery", _patched_find([legacy])):
+        assert await backfill_auto_query_ids(kb) == 1
+
+    assert legacy.external_id == "FCOI-AUTO-Q002"
+    assert legacy.save.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reserve_and_write_retries_an_insert_the_unique_index_rejects():
+    """The generate path: a freshly built row whose insert loses the race."""
+    alloc = AutoQueryIdAllocator("FCOI", ["FCOI-AUTO-Q004"])
+    row = SimpleNamespace(external_id=None)
+    row.insert = AsyncMock(side_effect=[DuplicateKeyError("dup"), DuplicateKeyError("dup"), None])
+    tq = MagicMock()
+    tq.find_one = AsyncMock(return_value=None)
+
+    with patch("app.models.kb_test_query.KBTestQuery", tq):
+        written = await reserve_and_write(alloc, row, "kb-1", write=row.insert)
+
+    assert written == "FCOI-AUTO-Q007"
+    assert row.external_id == "FCOI-AUTO-Q007"
+    assert row.insert.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_reserve_and_write_gives_up_on_a_collision_that_is_not_about_the_id():
+    """A DuplicateKeyError on some other key would never clear by renumbering."""
+    alloc = AutoQueryIdAllocator("FCOI", [])
+    row = SimpleNamespace(external_id=None)
+    row.insert = AsyncMock(side_effect=DuplicateKeyError("dup"))
+    tq = MagicMock()
+    tq.find_one = AsyncMock(return_value=None)
+
+    with patch("app.models.kb_test_query.KBTestQuery", tq), pytest.raises(RuntimeError):
+        await reserve_and_write(alloc, row, "kb-1", write=row.insert)
+    assert row.insert.await_count == ids._MAX_ID_COLLISION_RETRIES
+
+
+# ---------------------------------------------------------------------------
+# Building the unique index over pre-existing duplicates would crash every
+# process at init, so the duplicates are cleared right before init_beanie.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCollection:
+    """Just enough of a Motor collection for the dedup: ``aggregate`` yields
+    the canned groups, ``update_many`` records what it was asked to clear."""
+
+    def __init__(self, groups):
+        self._groups = groups
+        self.pipelines = []
+        self.update_many = AsyncMock()
+
+    def aggregate(self, pipeline):
+        self.pipelines.append(pipeline)
+
+        async def gen():
+            for g in self._groups:
+                yield g
+
+        return gen()
+
+
+def _ts(day, tz=datetime.timezone.utc):
+    return datetime.datetime(2026, 1, day, tzinfo=tz)
+
+
+@pytest.mark.asyncio
+async def test_dedupe_keeps_the_oldest_row_and_clears_the_rest(caplog):
+    # Three rows share FCOI-AUTO-Q001 on kb-1: one with no created_at (an
+    # odd legacy row), one aware, one naive — the sort must not raise on the
+    # mix, and the earliest real timestamp wins.
+    coll = _FakeCollection([
+        {
+            "_id": {"kb": "kb-1", "external_id": "FCOI-AUTO-Q001"},
+            "count": 3,
+            "rows": [
+                {"_id": "oid-c", "uuid": "c", "created_at": None},
+                {"_id": "oid-b", "uuid": "b", "created_at": _ts(5)},
+                {"_id": "oid-a", "uuid": "a", "created_at": _ts(2, tz=None)},
+            ],
+        },
+        {
+            "_id": {"kb": "kb-2", "external_id": "SUB-002"},
+            "count": 2,
+            "rows": [
+                {"_id": "oid-y", "uuid": "y", "created_at": _ts(9)},
+                {"_id": "oid-x", "uuid": "x", "created_at": _ts(9)},
+            ],
+        },
+    ])
+
+    with caplog.at_level(logging.WARNING, logger="app.services.kb_test_query_ids"):
+        cleared = await dedupe_test_query_external_ids(coll)
+
+    assert cleared == 3
+    # Only string-typed IDs are grouped — None/missing never collide.
+    assert coll.pipelines[0][0] == {"$match": {"external_id": {"$type": "string"}}}
+    filters = [c.args[0]["_id"]["$in"] for c in coll.update_many.await_args_list]
+    assert filters == [["oid-b", "oid-c"], ["oid-y"]]
+    for c in coll.update_many.await_args_list:
+        assert c.args[1] == {"$set": {"external_id": None}}
+    # An operator can find what was cleared: KB, ID, kept row, cleared rows.
+    first = caplog.records[0].getMessage()
+    assert "kb-1" in first and "FCOI-AUTO-Q001" in first
+    assert "kept it on query a" in first and "['b', 'c']" in first
+
+
+@pytest.mark.asyncio
+async def test_dedupe_is_a_no_op_on_a_clean_collection():
+    coll = _FakeCollection([])
+    assert await dedupe_test_query_external_ids(coll) == 0
+    coll.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_init_db_dedupes_before_beanie_builds_indexes_and_not_when_skipping(monkeypatch):
+    from app import database
+
+    events = []
+    fake_client = MagicMock()
+    monkeypatch.setattr(database, "_indexes_ensured", False)
+    monkeypatch.setattr(database, "_client", None)
+    monkeypatch.setattr(database, "AsyncIOMotorClient", MagicMock(return_value=fake_client))
+
+    async def fake_migrations(db):
+        events.append(("migrate", db))
+
+    async def fake_init_beanie(**kwargs):
+        events.append(("init_beanie", kwargs["skip_indexes"]))
+
+    monkeypatch.setattr(database, "_run_pre_index_migrations", fake_migrations)
+    monkeypatch.setattr(database, "init_beanie", fake_init_beanie)
+    settings = SimpleNamespace(mongo_host="mongodb://unit-test", mongo_db="osp")
+
+    await database.init_db(settings)
+    assert events == [("migrate", fake_client["osp"]), ("init_beanie", False)]
+
+    # Indexes are now ensured for this process: a later init (a Celery task)
+    # skips both the index build and the dedup that only exists to guard it.
+    events.clear()
+    await database.init_db(settings)
+    assert events == [("init_beanie", True)]
+
+
+@pytest.mark.asyncio
+async def test_pre_index_migrations_target_the_test_query_collection_and_never_raise():
+    from app import database
+
+    db = MagicMock()
+    dedupe = AsyncMock(return_value=2)
+    with patch("app.services.kb_test_query_ids.dedupe_test_query_external_ids", dedupe):
+        await database._run_pre_index_migrations(db)
+    dedupe.assert_awaited_once_with(db["kb_test_queries"])
+
+    # A dedup that cannot run must not itself block startup.
+    with patch(
+        "app.services.kb_test_query_ids.dedupe_test_query_external_ids",
+        AsyncMock(side_effect=RuntimeError("mongo went away")),
+    ):
+        await database._run_pre_index_migrations(db)

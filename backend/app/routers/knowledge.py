@@ -1327,14 +1327,9 @@ async def list_test_queries(uuid: str, user: User = Depends(get_current_user)):
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     from app.models.kb_test_query import KBTestQuery
-    from app.services.kb_test_query_ids import backfill_auto_query_ids
-    # Auto-generated queries from before IDs existed get theirs on first
-    # read, so an older set is trackable without a regeneration. Listing
-    # must still work if the backfill cannot write.
-    try:
-        await backfill_auto_query_ids(kb)
-    except Exception:
-        logger.exception("Could not backfill auto-query IDs for KB %s", kb.uuid)
+    # Read-only: a member who can only view the KB lands here, so nothing is
+    # written. Auto-generated queries from before IDs existed get theirs on
+    # the next generation or import (kb_test_query_ids.backfill_auto_query_ids).
     queries = await KBTestQuery.find(
         KBTestQuery.knowledge_base_uuid == kb.uuid,
     ).sort("-created_at").to_list()
@@ -1421,6 +1416,14 @@ async def import_test_queries(uuid: str, request: Request, user: User = Depends(
         raise HTTPException(status_code=400, detail=str(e))
 
     from app.models.kb_test_query import KBTestQuery
+    from app.services.kb_test_query_ids import backfill_auto_query_ids
+    # A write path, so auto-generated queries from before IDs existed get
+    # theirs now (listing never writes). The import must still go through if
+    # the backfill cannot.
+    try:
+        await backfill_auto_query_ids(kb)
+    except Exception:
+        logger.exception("Could not backfill auto-query IDs for KB %s", kb.uuid)
     existing = await KBTestQuery.find(
         KBTestQuery.knowledge_base_uuid == kb.uuid,
     ).to_list()

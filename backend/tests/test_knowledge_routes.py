@@ -2241,6 +2241,7 @@ class TestTestQueryImport:
             "category": None,
             "notes": None,
             "external_id": None,
+            "auto_generated": False,
             "updated_at": None,
             "user_id": "user1",
         }
@@ -2587,6 +2588,91 @@ class TestTestQueryImport:
         assert resp.status_code == 200
         assert resp.json()["created"] == 1
         assert resp.json()["unmatched_source_labels"] == []
+
+    @pytest.mark.asyncio
+    async def test_import_numbers_legacy_auto_queries_before_reading_the_set(self, client):
+        """Import is a write path, so pre-#876 auto-generated rows get their
+        IDs here (#886 moved this off the GET)."""
+        user = _make_user()
+        cookies, headers = _auth()
+        kb = _mock_kb()
+        fake_cls, _created = self._fake_query_cls([])
+        backfill = AsyncMock(return_value=1)
+
+        with (
+            patch("app.dependencies.decode_token", return_value={"sub": "user1", "type": "access"}),
+            patch("app.dependencies.User") as MockUser,
+            patch("app.routers.knowledge.svc") as mock_svc,
+            patch("app.routers.knowledge.organization_service") as mock_org,
+            patch("app.models.kb_test_query.KBTestQuery", fake_cls),
+            patch("app.services.kb_test_query_ids.backfill_auto_query_ids", backfill),
+        ):
+            MockUser.find_one = AsyncMock(return_value=user)
+            mock_org.get_user_org_ancestry = AsyncMock(return_value=[])
+            mock_svc.get_knowledge_base = AsyncMock(return_value=kb)
+            mock_svc.get_kb_sources = AsyncMock(return_value=[])
+            mock_svc.resolve_document_titles = AsyncMock(return_value={})
+
+            resp = await client.post(
+                "/api/knowledge/kb-uuid-1/test-queries/import",
+                json=self._payload("Question,Source\nQ1,Doc A\n"),
+                cookies=cookies,
+                headers=headers,
+            )
+
+        assert resp.status_code == 200
+        backfill.assert_awaited_once_with(kb)
+
+
+class TestTestQueryList:
+    """GET /{uuid}/test-queries — a read, reachable by members who can only view."""
+
+    @pytest.mark.asyncio
+    async def test_list_does_not_write_ids_onto_legacy_auto_queries(self, client):
+        """The review of #876: the GET ran the ID backfill, so a read-only
+        member's page view wrote external_id onto rows. Listing must be
+        side-effect free; the legacy row simply shows no ID (#886)."""
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        user = _make_user()
+        cookies, headers = _auth()
+        kb = _mock_kb()
+        legacy = SimpleNamespace(
+            uuid="legacy-1", query="Old auto question?", expected_source_labels=[],
+            expected_answer_contains=None, expected_answer="A", category=None, notes=None,
+            external_id=None, auto_generated=True, source_chunk_ids=[],
+            last_judged_score=None, last_judged_at=None,
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), updated_at=None,
+        )
+        legacy.save = AsyncMock()
+        fake_cls = MagicMock()
+        fake_cls.find.return_value.sort.return_value.to_list = AsyncMock(return_value=[legacy])
+        backfill = AsyncMock(return_value=1)
+
+        with (
+            patch("app.dependencies.decode_token", return_value={"sub": "user1", "type": "access"}),
+            patch("app.dependencies.User") as MockUser,
+            patch("app.routers.knowledge.svc") as mock_svc,
+            patch("app.routers.knowledge.organization_service") as mock_org,
+            patch("app.models.kb_test_query.KBTestQuery", fake_cls),
+            patch("app.services.kb_test_query_ids.backfill_auto_query_ids", backfill),
+        ):
+            MockUser.find_one = AsyncMock(return_value=user)
+            mock_org.get_user_org_ancestry = AsyncMock(return_value=[])
+            mock_svc.get_knowledge_base = AsyncMock(return_value=kb)
+
+            resp = await client.get(
+                "/api/knowledge/kb-uuid-1/test-queries",
+                cookies=cookies,
+                headers=headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["test_queries"][0]["external_id"] is None
+        backfill.assert_not_awaited()
+        legacy.save.assert_not_awaited()
+        fake_cls.find_one.assert_not_called()
 
 
 class TestTestQueryBulkDelete:

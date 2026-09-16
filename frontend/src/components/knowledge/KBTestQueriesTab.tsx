@@ -509,7 +509,7 @@ export function KBTestQueriesTab({
                     <div style={{ fontSize: 12, color: '#e5e5e5', marginBottom: 4 }}>
                       {q.external_id && (
                         <code
-                          title="Question ID — stable across validation runs and exports"
+                          title="Question ID — assigned once and kept across validation runs and exports; regenerating creates new IDs"
                           style={{
                             fontSize: 10, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                             color: '#a78bfa', backgroundColor: 'rgba(124, 58, 237, 0.12)',

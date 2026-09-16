@@ -27,7 +27,9 @@ from app.services.config_service import get_user_model_name
 from app.services.kb_test_query_ids import (
     AutoQueryIdAllocator,
     auto_query_notes,
+    backfill_auto_query_ids,
     kb_id_prefix,
+    reserve_and_write,
 )
 from app.services.workflow_validator import _extract_json
 
@@ -219,6 +221,17 @@ class KBQuestionGenerator:
         # filters as one. IDs continue from whatever the KB already holds,
         # so a second generation never reuses one (imported IDs are never
         # touched — see kb_test_query_ids).
+        #
+        # Legacy auto-generated rows with no ID are numbered first, so this
+        # batch continues after them and the KB's oldest questions keep the
+        # lowest numbers. This is the write path (inline or in the Celery
+        # task, both land here); a preview must not touch the KB, and the
+        # generation must still go through if the backfill cannot.
+        if persist:
+            try:
+                await backfill_auto_query_ids(kb)
+            except Exception:
+                logger.exception("Could not backfill auto-query IDs for KB %s", kb_uuid)
         allocator = AutoQueryIdAllocator(
             kb_id_prefix(getattr(kb, "title", None), kb_uuid),
             await self._existing_external_ids(kb_uuid),
@@ -247,15 +260,16 @@ class KBQuestionGenerator:
                     model_name=model_name,
                     generated_at=generated_at,
                 ),
-                # A preview never touches the KB; a persisted row re-checks
-                # the KB so a concurrent generation cannot mint the same ID.
-                external_id=(await allocator.reserve(kb_uuid)) if persist else allocator.allocate(),
+                # A preview never touches the KB. A persisted row gets its ID
+                # below: re-checked against the KB, then written, with the
+                # unique index's DuplicateKeyError taken as "next number".
+                external_id=None if persist else allocator.allocate(),
                 source_chunk_ids=chunk_ids,
                 auto_generated=True,
                 user_id=user_id,
             )
             if persist:
-                await tq.insert()
+                await reserve_and_write(allocator, tq, kb_uuid, write=tq.insert)
             created.append(tq)
         return created
 
