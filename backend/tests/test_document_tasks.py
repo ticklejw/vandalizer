@@ -996,10 +996,13 @@ class TestSyncProjectKbOnMove:
         dm.add_to_kb.assert_called_once()
         db.knowledge_base_sources.insert_one.assert_called_once()
 
+    @patch("app.tasks.knowledge_base_tasks._recalculate_kb")
     @patch("app.tasks.document_tasks.get_sync_db")
     @patch("app.config.Settings")
     @patch("app.services.document_manager.DocumentManager")
-    def test_moving_out_of_project_removes_from_kb(self, MockDM, MockSettings, mock_get_db):
+    def test_moving_out_of_project_removes_from_kb(
+        self, MockDM, MockSettings, mock_get_db, recalc,
+    ):
         from app.tasks.document_tasks import sync_project_kb_on_move
 
         db = MagicMock()
@@ -1023,10 +1026,11 @@ class TestSyncProjectKbOnMove:
         assert result == "doc-1"
         dm.delete_kb_source.assert_called_once_with("kb1", "doc-1")
         db.knowledge_base_sources.delete_one.assert_called_once()
-        # KB counters decremented by the removed source's chunk count.
-        inc = db.knowledge_bases.update_one.call_args[0][1]["$inc"]
-        assert inc["total_chunks"] == -3
-        assert inc["total_sources"] == -1
+        # KB counters recomputed from the remaining rows, not decremented: a
+        # row a failed refresh left at status "error" was never in
+        # sources_ready, so a blind -1 would drift the count for good.
+        recalc.assert_called_once_with(db, "kb1")
+        db.knowledge_bases.update_one.assert_not_called()
 
 
 def _mirror_row(**overrides):
@@ -1364,15 +1368,13 @@ class TestProjectKbMirrorRefresh:
         recalc.assert_called_once_with(db, "kb1")
 
     @patch("app.tasks.knowledge_base_tasks._recalculate_kb")
-    def test_a_failure_after_the_add_is_still_a_refresh_failure(self, recalc):
-        """The chunks are replaced by the time the row write and the recount
-        run, so a failure there leaves the same half-done state as a failure
-        before them — and used to escape unwrapped, belling the owner the
-        insert branch's "was saved, but could not be added"."""
-        from app.tasks.document_tasks import (
-            ProjectKbRefreshFailed,
-            _mirror_into_project_kb,
-        )
+    def test_a_failed_stamp_after_the_add_is_not_a_refresh_failure(self, recalc):
+        """By the time the row write runs the new chunks are in Chroma and
+        current, so a transient write failure there must not error the row
+        and bell "removed and could not be replaced" — the project can answer
+        from the document. The row keeps its previous fingerprint, so the next
+        pass through the gate refreshes again."""
+        from app.tasks.document_tasks import _mirror_into_project_kb
         from app.utils import kb_source_currency as currency
 
         new_text = "Performance Date & Time: 29 April 2026, 7:30pm"
@@ -1381,21 +1383,48 @@ class TestProjectKbMirrorRefresh:
         )
         db = MagicMock()
         db.knowledge_base_sources.find_one.return_value = row
-        # The success write raises; the error write that follows it lands.
-        db.knowledge_base_sources.update_one.side_effect = [
-            RuntimeError("mongo write concern failed"), None,
-        ]
+        db.knowledge_base_sources.update_one.side_effect = RuntimeError(
+            "mongo write concern failed"
+        )
         dm = MagicMock()
         dm.delete_kb_source.return_value = True
         dm.add_to_kb.return_value = 7
 
-        with pytest.raises(ProjectKbRefreshFailed, match="mongo write concern failed"):
-            _mirror_into_project_kb(db, dm, _project_doc(new_text), _PROJECT, new_text)
+        _mirror_into_project_kb(db, dm, _project_doc(new_text), _PROJECT, new_text)
 
+        dm.add_to_kb.assert_called_once()
+        # One attempt at the success stamp; no error row written over it.
+        db.knowledge_base_sources.update_one.assert_called_once()
         written = db.knowledge_base_sources.update_one.call_args[0][1]["$set"]
-        assert written["status"] == "error"
-        assert written["chunk_count"] == 0
-        assert "mongo write concern failed" in written["error_message"]
+        assert written["status"] == "ready"
+        assert written["content_hash"] == currency.content_fingerprint(new_text)
+        recalc.assert_not_called()
+
+    @patch("app.tasks.knowledge_base_tasks._recalculate_kb")
+    def test_a_failed_recount_after_the_stamp_leaves_the_row_ready(self, recalc):
+        """The recount only maintains the KB's aggregate counters; failing it
+        leaves them one pass stale, which is not a state the owner needs a
+        bell for and not one that may un-stamp a row whose chunks are current."""
+        from app.tasks.document_tasks import _mirror_into_project_kb
+        from app.utils import kb_source_currency as currency
+
+        new_text = "Performance Date & Time: 29 April 2026, 7:30pm"
+        row = _mirror_row(
+            content_hash=currency.content_fingerprint("the first, bad extraction"),
+        )
+        db = MagicMock()
+        db.knowledge_base_sources.find_one.return_value = row
+        dm = MagicMock()
+        dm.delete_kb_source.return_value = True
+        dm.add_to_kb.return_value = 7
+        recalc.side_effect = RuntimeError("mongo find timed out")
+
+        _mirror_into_project_kb(db, dm, _project_doc(new_text), _PROJECT, new_text)
+
+        db.knowledge_base_sources.update_one.assert_called_once()
+        written = db.knowledge_base_sources.update_one.call_args[0][1]["$set"]
+        assert written["status"] == "ready"
+        assert written["chunk_count"] == 7
         recalc.assert_called_once_with(db, "kb1")
 
 

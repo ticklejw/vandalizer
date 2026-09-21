@@ -149,9 +149,8 @@ def _mirror_into_project_kb(db, dm, doc: dict, project: dict, text: str) -> None
         # Chunk ids are deterministic (``<document_uuid>_chunk_<i>``), so a
         # shorter second extraction would leave the tail of the first one behind
         # for retrieval to find. The delete is what makes the replacement total
-        # — and it is why the whole block needs a guard: from the delete to the
-        # recount, every step leaves a row whose "ready" and chunk_count
-        # describe chunks that are no longer what the document says.
+        # — and it is why the delete/add pair needs a guard: between them the
+        # row's "ready" and chunk_count describe chunks that are gone.
         #
         # delete_kb_source logs and swallows its own exceptions, so its return
         # value is the only evidence the old chunks are gone. Re-adding over a
@@ -168,27 +167,6 @@ def _mirror_into_project_kb(db, dm, doc: dict, project: dict, text: str) -> None
                     f"could not remove the previous chunks for {doc_uuid} from {kb_uuid}"
                 )
             chunk_count = _add_document_chunks_to_kb(dm, kb_uuid, doc, text)
-            db.knowledge_base_sources.update_one(
-                {"_id": existing["_id"]},
-                {
-                    "$set": {
-                        "chunk_count": chunk_count,
-                        "status": "ready",
-                        "error_message": None,
-                        # Kept so the row still has a name if the document is
-                        # later deleted from Files — the chunks outlive it.
-                        "document_title": doc.get("title") or None,
-                        # The document was just re-read, so the retrieval dates
-                        # move with the ingestion one.
-                        **currency.ingestion_stamp(text),
-                    }
-                },
-            )
-            # Recomputed from the rows, not incremented: this row was already
-            # counted toward total_sources when it was inserted, and its old
-            # chunk_count is the number the new one replaces. An $inc here
-            # would double-count the source on every retry.
-            _recalculate_kb(db, kb_uuid)
         except Exception as e:
             db.knowledge_base_sources.update_one(
                 {"_id": existing["_id"]},
@@ -220,6 +198,43 @@ def _mirror_into_project_kb(db, dm, doc: dict, project: dict, text: str) -> None
             if isinstance(e, ProjectKbRefreshFailed):
                 raise
             raise ProjectKbRefreshFailed(str(e)) from e
+
+        # From here the new chunks are in Chroma and current: the project can
+        # answer from the document whatever happens to the bookkeeping below.
+        # A failed stamp leaves the row carrying the previous fingerprint, so
+        # the next pass through the gate simply refreshes again; a failed
+        # recount leaves the KB's aggregate counters one pass stale. Neither is
+        # the "removed and could not be replaced" state the bell describes, so
+        # neither may convert a successful refresh into an errored row.
+        try:
+            db.knowledge_base_sources.update_one(
+                {"_id": existing["_id"]},
+                {
+                    "$set": {
+                        "chunk_count": chunk_count,
+                        "status": "ready",
+                        "error_message": None,
+                        # Kept so the row still has a name if the document is
+                        # later deleted from Files — the chunks outlive it.
+                        "document_title": doc.get("title") or None,
+                        # The document was just re-read, so the retrieval dates
+                        # move with the ingestion one.
+                        **currency.ingestion_stamp(text),
+                    }
+                },
+            )
+            # Recomputed from the rows, not incremented: this row was already
+            # counted toward total_sources when it was inserted, and its old
+            # chunk_count is the number the new one replaces. An $inc here
+            # would double-count the source on every retry.
+            _recalculate_kb(db, kb_uuid)
+        except Exception:
+            logger.exception(
+                "Refreshed document %s in project %s implicit KB but could not "
+                "record it; the next pass will refresh it again",
+                doc_uuid, project.get("uuid"),
+            )
+            return
         logger.info(
             "Refreshed document %s in project %s implicit KB (%d chunks)",
             doc_uuid, project.get("uuid"), chunk_count,
@@ -288,19 +303,14 @@ def _remove_from_project_kb(db, dm, doc: dict, project: dict) -> None:
     dm.delete_kb_source(kb_uuid, doc_uuid)
     db.knowledge_base_sources.delete_one({"_id": src["_id"]})
 
-    chunk_count = src.get("chunk_count") or 0
-    now = datetime.datetime.now(tz=datetime.timezone.utc)
-    db.knowledge_bases.update_one(
-        {"uuid": kb_uuid},
-        {
-            "$inc": {
-                "total_sources": -1,
-                "sources_ready": -1,
-                "total_chunks": -chunk_count,
-            },
-            "$set": {"updated_at": now},
-        },
-    )
+    # Recomputed from the rows, not decremented: since a failed refresh can
+    # leave a project-KB row at status "error", a blind ``sources_ready: -1``
+    # here would take an errored row out of the ready count and leave
+    # sources_failed counting a row that no longer exists — a drift nothing
+    # corrects until some other document on the KB happens to be refreshed.
+    from app.tasks.knowledge_base_tasks import _recalculate_kb
+
+    _recalculate_kb(db, kb_uuid)
     logger.info(
         "Removed document %s from project %s implicit KB",
         doc_uuid, project.get("uuid"),
