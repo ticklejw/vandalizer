@@ -444,12 +444,17 @@ def perform_extraction_and_update(
                 # half diagnoses the fonts, and only it leaves "retry once OCR
                 # is available" as advice worth giving, since the other half
                 # is reached with OCR up and answering.
+                # The reader pops the partial-conversion signal before this
+                # branch sees it, so "nothing usable" may be one page of
+                # three: the advice has to leave a retry open rather than
+                # send the user straight to re-upload.
                 if ocr_report.get("text_layer_rejected_reason") == "ocr_required":
                     message = (
                         "OCR read this document's pages and found nothing "
                         "usable, and its own text layer was already refused "
-                        "as unreadable. Re-upload a printed or scanned copy "
-                        "of the document."
+                        "as unreadable. Retry extraction in case the OCR "
+                        "service was degraded, or re-upload a printed or "
+                        "scanned copy of the document."
                     )
                 else:
                     message = (
@@ -504,6 +509,13 @@ def perform_extraction_and_update(
             "extraction_nonletter_ratio": extraction_ratio,
             "ingestion_warnings": ingestion_warnings,
             "error_message": None,
+            # The refusal this run was retrying is resolved: the document has
+            # a stored reading again, and the next retry starts from its
+            # status and ratio like any other. Left set, a ratio false
+            # positive (a short page of checkbox glyphs) would make every
+            # later re-read OCR-only, and fail it outright whenever OCR is
+            # down — for a document whose local reading was fine.
+            "text_layer_rejected": False,
         }
         if num_pages is not None:
             update_fields["num_pages"] = num_pages

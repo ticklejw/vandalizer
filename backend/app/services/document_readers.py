@@ -1196,9 +1196,14 @@ def _read_pdf_text_and_markers(
         # into a usable value. Under ocr_required the caller has already said
         # a non-OCR reading of these pages is unacceptable, so a failure to
         # reach OCR is the task's failure to retry, not a licence to store
-        # the text layer being replaced.
+        # the text layer being replaced. Re-raised as OcrUnavailableError
+        # rather than bare: the task's catch-all records any other exception
+        # as "Text extraction failed" and returns before autoretry_for can
+        # see it, so only this type reaches the backoff (#633).
         if ocr_required:
-            raise
+            raise ocr_client.OcrUnavailableError(
+                f"could not ask OCR to read {file_path}: {e}"
+            ) from e
         logger.warning("OCR raised, falling back to PyMuPDF: %s", e)
         ocr_text = ""
     if ocr_text and len(ocr_text.strip()) >= MIN_PDF_TEXT_LENGTH:

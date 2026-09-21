@@ -356,8 +356,9 @@ class TestPerformExtractionAndUpdate:
         assert update_set["task_status"] == "error"
         assert update_set["error_message"] == (
             "OCR read this document's pages and found nothing usable, and its "
-            "own text layer was already refused as unreadable. Re-upload a "
-            "printed or scanned copy of the document."
+            "own text layer was already refused as unreadable. Retry extraction "
+            "in case the OCR service was degraded, or re-upload a printed or "
+            "scanned copy of the document."
         )
 
     @patch("app.tasks.document_tasks.get_sync_db")
@@ -391,6 +392,44 @@ class TestPerformExtractionAndUpdate:
         update_set = db.smart_document.update_one.call_args_list[-1][0][1]["$set"]
         assert update_set["text_layer_rejected"] is True
         assert update_set["extraction_nonletter_ratio"] is None
+
+    @patch("app.tasks.document_tasks.get_sync_db")
+    @patch("app.config.Settings")
+    @patch("app.services.document_readers.pdf_page_count", return_value=1)
+    @patch(
+        "app.services.document_readers.extract_text_with_markers",
+        return_value=(
+            "Award Number: 2026-0412. Total costs approved for the period.",
+            [{"char_offset": 0, "kind": "page", "value": 1}],
+        ),
+    )
+    def test_a_successful_reading_clears_the_rejected_layer(
+        self, mock_extract, mock_page_count, MockSettings, mock_get_db,
+    ):
+        """The retry route sets text_layer_rejected from the non-letter ratio
+        before OCR has confirmed anything. Left set after OCR read the pages
+        fine, a ratio false positive would pin the document to OCR-only
+        re-reads for good — failing outright whenever OCR is down, for a
+        document whose local reading was never actually bad."""
+        from app.tasks.document_tasks import perform_extraction_and_update
+
+        db = MagicMock()
+        mock_get_db.return_value = db
+        db.smart_document.find_one.return_value = {
+            "uuid": "doc-1", "path": "checkboxes.pdf", "text_layer_rejected": True,
+        }
+
+        settings = MagicMock()
+        settings.upload_dir = "/uploads"
+        MockSettings.return_value = settings
+
+        perform_extraction_and_update(
+            document_uuid="doc-1", extension="pdf", force_ocr=True, ocr_required=True,
+        )
+
+        update_set = db.smart_document.update_one.call_args_list[-1][0][1]["$set"]
+        assert update_set["error_message"] is None
+        assert update_set["text_layer_rejected"] is False
 
     @patch("app.tasks.document_tasks.get_sync_db")
     @patch("app.config.Settings")

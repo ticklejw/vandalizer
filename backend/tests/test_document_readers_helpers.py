@@ -1020,9 +1020,13 @@ class TestGarbledTextLayerGate:
         unreadable system config, a DB blip, a bad timeout value. Swallowing
         it would hand the document back the local reading the retry exists to
         replace; the caller said that reading is unacceptable, so the failure
-        is the task's to retry."""
+        is the task's to retry. It has to leave as OcrUnavailableError: the
+        task's catch-all records anything else as "Text extraction failed"
+        and returns before autoretry_for can see it, so a bare re-raise
+        would promise a backoff that never happens."""
         from unittest.mock import patch
         import app.services.document_readers as dr
+        from app.services.ocr_client import OcrUnavailableError
 
         classification = type(
             "C", (), {"pdf_type": "text_based", "confidence": 0.95, "pages_needing_ocr": []},
@@ -1033,11 +1037,12 @@ class TestGarbledTextLayerGate:
              patch.object(dr, "ocr_extract_text_from_pdf", side_effect=ValueError("bad input")), \
              patch.object(dr, "_local_markdown_extract_from_pdf") as mock_fast_path, \
              patch.object(dr, "_pymupdf_extract_with_pages") as mock_pymupdf:
-            with pytest.raises(ValueError):
+            with pytest.raises(OcrUnavailableError, match="bad input") as excinfo:
                 dr._read_pdf_text_and_markers(
                     text_pdf, report=report, force_ocr=True, ocr_required=True,
                 )
 
+        assert isinstance(excinfo.value.__cause__, ValueError)
         mock_fast_path.assert_not_called()
         mock_pymupdf.assert_not_called()
         assert "text_layer_rejected" not in report
