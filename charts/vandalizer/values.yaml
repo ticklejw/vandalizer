@@ -51,6 +51,10 @@ config:
   # Arbitrary additional non-secret environment variables for the backend
   # (api + celery + bootstrap), e.g. GRAPH_NOTIFICATION_URL,
   # VANDALIZER_BASE_URL, SMTP settings, LOG_FORMAT. Keys are used verbatim.
+  # Since v4.12.0 this is also where OUTBOUND_URL_ALLOWED_HOSTS goes: the
+  # comma-separated hostnames exempted from the SSRF guard on server-side
+  # HTTP (e.g. an on-campus LLM router on a private address). Admins can
+  # manage the same list in Admin > System Config > Endpoints; both apply.
   extraEnv: {}
   # Optional: token counting can read HuggingFace tokenizer vocabularies from
   # TOKENIZER_CACHE_ROOT (default /hf-cache; without it the app estimates and
