@@ -385,6 +385,14 @@ server {
 }
 ```
 
+### Single sign-on (SSO)
+
+Vandalizer authenticates with local passwords by default. A superadmin can add identity providers under **Admin → System Config → Authentication**: **Azure AD** (OAuth) and **SAML 2.0** (Shibboleth is verified against a live IdP; other SAML 2.0 IdPs follow the same setup). Providers are stored in System Config and take effect on save; nothing SSO-related goes in `backend/.env`.
+
+- **SAML setup.** Paste the IdP's metadata URL or XML into *Import from IdP metadata* and the entity ID, SSO URL and signing certificate fill in. An IdP that publishes separate signing and encryption certificates (the standard Shibboleth layout) is read correctly; the first signing certificate is used. Register Vandalizer with the IdP using its SP metadata at `https://<your-host>/api/auth/saml/metadata`; the assertion consumer service is `https://<your-host>/api/auth/saml/acs`.
+- **Create accounts on first sign-in (JIT provisioning).** On by default, per provider: any identity the IdP asserts gets an account on first login. Turn it off to require that an account already exist. An unknown identity is then denied, the denial is audit-logged as `user.login_denied` with the asserted ID, and the person lands on a page saying the account has not been set up. Existing users are unaffected either way, because the flag gates account creation only.
+- **Behind a TLS-terminating proxy, forward the scheme.** SAML builds its issuer and ACS URLs, and validates the IdP's response, from the `X-Forwarded-Proto` header. The frontend container passes an upstream `X-Forwarded-Proto` through and falls back to its own scheme only when none arrives, so whatever terminates TLS in front of it (the nginx example above, Caddy, Traefik, Cloudflare, a load balancer) must send `X-Forwarded-Proto: https`. Without it, SAML requests carry `http://` URLs and the IdP's response is rejected as received over HTTP.
+
 ### Post-Deploy Verification
 
 Run the status script to check all services, health, and seed data:
