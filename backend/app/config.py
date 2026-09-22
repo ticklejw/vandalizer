@@ -198,6 +198,15 @@ class Settings(BaseSettings):
     # leaves wide margin on both sides and tolerates notation-heavy documents.
     extraction_max_nonletter_ratio: float = 0.25
 
+    # Hostnames that server-side HTTP (workflow API Call and Fetch steps,
+    # automation callbacks, credential token endpoints) may reach even though
+    # they resolve to a private, loopback or link-local address. Comma-
+    # separated, exact hostnames, matched case-insensitively -- no wildcards
+    # and no CIDR, so each exception is one named service an operator chose.
+    # Everything else keeps the SSRF block. Typical use: an on-campus API
+    # such as an institutional LLM router that only has an RFC 1918 address.
+    outbound_url_allowed_hosts: str = ""
+
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":
         # Resolve relative paths against the backend directory (parent of app/)

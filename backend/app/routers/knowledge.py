@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.dependencies import get_current_user
 from app.rate_limit import limiter
 from app.models.user import User
-from app.models.validation_run import ValidationRun
+from app.models.validation_run import SMOKE_TEST_SOURCE, ValidationRun
 from app.models.kb_optimization_run import KBOptimizationRun
 from app.models.library import LibraryItemKind
 from app.models.verification import VerifiedItemMetadata
@@ -228,10 +228,12 @@ async def _latest_runs_by_kb(kb_uuids: list[str]) -> dict[str, _TrustSummary]:
 
     out: dict[str, _TrustSummary] = {}
 
-    # Manual validation runs.
+    # Manual validation runs. A smoke test over a few chosen queries is not
+    # the KB's trust signal.
     vruns = await ValidationRun.find({
         "item_kind": "knowledge_base",
         "item_id": {"$in": kb_uuids},
+        "source": {"$ne": SMOKE_TEST_SOURCE},
     }).sort("-created_at").to_list()
     for r in vruns:
         if r.item_id in out:
@@ -289,6 +291,7 @@ def _source_response(
         error_message=s.error_message or "",
         chunk_count=s.chunk_count,
         truncated=bool(getattr(s, "truncated", False)),
+        warnings=list(getattr(s, "warnings", None) or []),
         ingestion_warnings=warnings,
         ingestion_warning_text=(
             "; ".join(INGESTION_WARNING_LABELS[c] for c in warnings) or None
@@ -1027,6 +1030,11 @@ async def validate_knowledge_base(
       - mode: "judge" (default) or "judge+baseline" (analysis mode with lift).
       - skip_judge: bool — skip the LLM judge entirely (cheap re-run).
       - async: bool — enqueue a Celery task and return {task_id} instead of running inline.
+      - query_uuids: list[str] — run only these test queries (a smoke test).
+        The run lands in history and exports like any other but is tagged
+        so it never becomes the KB's quality score. 400 when empty, when more
+        than ``_VALIDATE_SELECTED_MAX`` are given, or when any of them is not
+        a test query of this KB (a stale selection must not shrink silently).
     """
     user_org_ancestry = await organization_service.get_user_org_ancestry(user)
     kb = await svc.get_knowledge_base(
@@ -1046,14 +1054,48 @@ async def validate_knowledge_base(
     skip_judge = bool(body.get("skip_judge", False))
     async_run = bool(body.get("async", False))
 
+    query_uuids: list[str] | None = None
+    if "query_uuids" in body:
+        raw = body.get("query_uuids")
+        if not isinstance(raw, list) or not raw or not all(isinstance(u, str) and u for u in raw):
+            raise HTTPException(status_code=400, detail="query_uuids must be a non-empty list of test query uuids")
+        query_uuids = list(dict.fromkeys(raw))
+        if len(query_uuids) > _VALIDATE_SELECTED_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot run more than {_VALIDATE_SELECTED_MAX} selected test queries at once "
+                    f"({len(query_uuids)} requested) — narrow the selection or run a full validation"
+                ),
+            )
+        from app.models.kb_test_query import KBTestQuery
+        owned = await KBTestQuery.find(
+            {"knowledge_base_uuid": kb.uuid, "uuid": {"$in": query_uuids}},
+        ).count()
+        if owned == 0:
+            raise HTTPException(status_code=400, detail="None of the selected test queries belong to this knowledge base")
+        # A stale selection (queries deleted or regenerated since the list was
+        # loaded) must not quietly shrink into a smaller run: the service would
+        # drop the unknown uuids and the row would say "selected 2/150" when the
+        # user picked 5. Refuse and say how many are gone.
+        if owned != len(query_uuids):
+            missing = len(query_uuids) - owned
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{missing} of the {len(query_uuids)} selected test queries no longer exist on this "
+                    "knowledge base — refresh the list and select again"
+                ),
+            )
+
     if async_run:
         from app.tasks.kb_validation_tasks import validate_kb_task
-        task = validate_kb_task.delay(kb.uuid, user.user_id, mode, skip_judge)
+        task = validate_kb_task.delay(kb.uuid, user.user_id, mode, skip_judge, query_uuids)
         return {"task_id": task.id, "status": "queued"}
 
     from app.services import kb_validation_service
     result = await kb_validation_service.run_kb_validation(
-        kb.uuid, user.user_id, mode=mode, skip_judge=skip_judge,
+        kb.uuid, user.user_id, mode=mode, skip_judge=skip_judge, query_uuids=query_uuids,
     )
     return result
 
@@ -1114,6 +1156,11 @@ async def export_kb_validation_run(
     def _has_details(run: ValidationRun) -> bool:
         return bool((run.result_snapshot or {}).get("retrieval_precision"))
 
+    def _is_full_run(run: ValidationRun) -> bool:
+        # "latest" means the latest full run; a smoke test over chosen
+        # queries exports only by its own uuid.
+        return _has_details(run) and getattr(run, "source", None) != SMOKE_TEST_SOURCE
+
     if run_uuid == "latest":
         recent = await (
             ValidationRun.find(
@@ -1125,7 +1172,7 @@ async def export_kb_validation_run(
             .limit(30)
             .to_list()
         )
-        vr = next((r for r in recent if _has_details(r)), None)
+        vr = next((r for r in recent if _is_full_run(r)), None)
         if not vr:
             raise HTTPException(
                 status_code=404,
@@ -1303,6 +1350,9 @@ async def list_test_queries(uuid: str, user: User = Depends(get_current_user)):
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     from app.models.kb_test_query import KBTestQuery
+    # Read-only: a member who can only view the KB lands here, so nothing is
+    # written. Auto-generated queries from before IDs existed get theirs on
+    # the next generation or import (kb_test_query_ids.backfill_auto_query_ids).
     queries = await KBTestQuery.find(
         KBTestQuery.knowledge_base_uuid == kb.uuid,
     ).sort("-created_at").to_list()
@@ -1389,6 +1439,14 @@ async def import_test_queries(uuid: str, request: Request, user: User = Depends(
         raise HTTPException(status_code=400, detail=str(e))
 
     from app.models.kb_test_query import KBTestQuery
+    from app.services.kb_test_query_ids import backfill_auto_query_ids
+    # A write path, so auto-generated queries from before IDs existed get
+    # theirs now (listing never writes). The import must still go through if
+    # the backfill cannot.
+    try:
+        await backfill_auto_query_ids(kb)
+    except Exception:
+        logger.exception("Could not backfill auto-query IDs for KB %s", kb.uuid)
     existing = await KBTestQuery.find(
         KBTestQuery.knowledge_base_uuid == kb.uuid,
     ).to_list()
@@ -1758,6 +1816,10 @@ async def delete_test_query(uuid: str, query_uuid: str, user: User = Depends(get
 # questions is a large one. Cap the batch well above that so a malformed
 # client can't ask for an unbounded delete.
 _TEST_QUERY_BULK_DELETE_MAX = 2000
+# Upper bound on ``query_uuids`` for POST /{uuid}/validate ("Run selected").
+# A selection that large is a full run in disguise — and an unbounded ``$in``
+# list is a free way to make Mongo and the judge do arbitrary work.
+_VALIDATE_SELECTED_MAX = 500
 
 
 class BulkDeleteTestQueriesBody(BaseModel):
@@ -1950,6 +2012,12 @@ async def start_kb_optimization(uuid: str, request: Request, user: User = Depend
         [str(u) for u in raw_uuids if u] if isinstance(raw_uuids, list) else []
     )
 
+    # Sweep orphaned runs first, the way the extraction and workflow start
+    # paths do: a run whose worker died past the hard time limit would
+    # otherwise hold this 409 until the hourly janitor fired (#835).
+    from app.services import kb_optimizer as _kb_optimizer
+    await _kb_optimizer.reap_stale_runs(kb.uuid)
+
     # Reject if a non-terminal run already exists for this KB.
     from app.models.kb_optimization_run import KBOptimizationRun
     active = await KBOptimizationRun.find_one(
@@ -2006,10 +2074,15 @@ async def get_active_kb_optimization(uuid: str, user: User = Depends(get_current
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     from app.models.kb_optimization_run import KBOptimizationRun
+    from app.services import kb_optimizer as _kb_optimizer
     run = await KBOptimizationRun.find_one(
         KBOptimizationRun.kb_uuid == kb.uuid,
         {"status": {"$in": ["queued", "running"]}},
     )
+    # Self-heal an orphaned run on read; if reaped it's no longer active.
+    run = await _kb_optimizer.reap_one(run)
+    if run is not None and run.status not in ("queued", "running"):
+        run = None
     return {"run": _serialize_optimization_run(run) if run else None}
 
 
@@ -2093,6 +2166,9 @@ async def get_kb_optimization(uuid: str, run_uuid: str, user: User = Depends(get
     )
     if not run:
         raise HTTPException(status_code=404, detail="Optimization run not found")
+    # Self-heal a forever-"Running…" run the next time it's polled.
+    from app.services import kb_optimizer as _kb_optimizer
+    run = await _kb_optimizer.reap_one(run)
     return _serialize_optimization_run(run)
 
 

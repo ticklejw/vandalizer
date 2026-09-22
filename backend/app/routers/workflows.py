@@ -1878,10 +1878,17 @@ async def get_active_workflow_optimization(
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
     from app.models.workflow_optimization_run import WorkflowOptimizationRun
+    from app.services import workflow_optimizer as _workflow_optimizer
     run = await WorkflowOptimizationRun.find_one(
         WorkflowOptimizationRun.workflow_id == workflow_id,
         {"status": {"$in": ["queued", "running"]}},
     )
+    # Self-heal an orphaned run on read; if reaped it's no longer active, so
+    # the spinner stops on the next poll instead of at the next start attempt
+    # or janitor pass (#835).
+    run = await _workflow_optimizer.reap_one(run)
+    if run is not None and run.status not in ("queued", "running"):
+        run = None
     return {"run": _serialize_workflow_optimization_run(run) if run else None}
 
 
@@ -1927,6 +1934,9 @@ async def get_workflow_optimization(
     )
     if not run:
         raise HTTPException(status_code=404, detail="Optimization run not found")
+    # Self-heal a forever-"Running…" run the next time it's polled.
+    from app.services import workflow_optimizer as _workflow_optimizer
+    run = await _workflow_optimizer.reap_one(run)
     return _serialize_workflow_optimization_run(run)
 
 

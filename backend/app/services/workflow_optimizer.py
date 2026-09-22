@@ -1187,13 +1187,28 @@ async def _execute_workflow_inproc(
     _u = await _User.find_one(_User.user_id == user_id)
     allow_code_execution = bool(_u and getattr(_u, "is_admin", False))
 
-    # Build steps_data the same way execute_workflow_task does, but driven by
-    # wf_data (already-expanded steps) instead of raw mongo lookups.
-    steps_data = await _build_steps_data_for_optimization(
-        wf_data=wf_data,
-        doc_uuids=doc_uuids,
-        user_id=user_id,
-    )
+    # Build steps_data through the one builder every run path uses (#862).
+    # The optimizer's own copy skipped step-level input, field_metadata,
+    # saved Prompt/Formatter resolution, the selected-document preload and
+    # the fixed-documents merge, so each trial measured a configuration the
+    # workflow never actually executes. The builder is sync pymongo, like the
+    # engine it feeds, so it runs on the same worker thread.
+    def _build() -> list[dict]:
+        from bson import ObjectId
+
+        from app.tasks import get_sync_db
+        from app.tasks.workflow_tasks import build_steps_data
+
+        db = get_sync_db()
+        workflow_doc = db.workflow.find_one({"_id": ObjectId(wf_id)})
+        if not workflow_doc:
+            raise OptimizationInputError(f"Workflow {wf_id} not found")
+        steps_data, _ = build_steps_data(
+            db, workflow_doc, wf_id, {"doc_uuids": list(doc_uuids), "user_id": user_id},
+        )
+        return steps_data
+
+    steps_data = await asyncio.to_thread(_build)
 
     def _run() -> tuple[Any, list, int, int]:
         # Deliberately outside the except below: a build refusal (unknown
@@ -1232,68 +1247,6 @@ async def _execute_workflow_inproc(
         steps_output[name] = {"output": entry.get("output"), "step_name": entry.get("name")}
 
     return final_output, steps_output, tokens_in, tokens_out
-
-
-async def _build_steps_data_for_optimization(
-    *,
-    wf_data: dict,
-    doc_uuids: list[str],
-    user_id: str,
-) -> list[dict]:
-    """Build the steps_data list expected by ``build_workflow_engine``.
-
-    Mirrors the trigger+steps shape that ``execute_workflow_task`` constructs
-    from raw mongo, but driven by the already-expanded ``wf_data`` (which
-    ``get_workflow`` has hydrated for us). Pre-loads doc_texts for extraction
-    nodes the same way the production path does.
-    """
-    from app.models.document import SmartDocument
-
-    # Trigger step
-    steps_data: list[dict] = [
-        {"name": "Document", "data": {"doc_uuids": list(doc_uuids)}, "tasks": []},
-    ]
-
-    # Pre-load doc texts once — every extraction-style step reuses the same
-    # list, just as the production path does.
-    doc_texts: list[str] = []
-    for du in doc_uuids:
-        doc = await SmartDocument.find_one({"uuid": du})
-        if doc and getattr(doc, "raw_text", None):
-            doc_texts.append(doc.raw_text)
-
-    for step in (wf_data or {}).get("steps", []) or []:
-        if not isinstance(step, dict):
-            continue
-        sname = step.get("name", "")
-        if not sname or sname == "Document":
-            continue
-        tasks_out: list[dict] = []
-        for task in step.get("tasks") or []:
-            if not isinstance(task, dict):
-                continue
-            tname = task.get("name", "")
-            tdata = dict(task.get("data") or {})
-            tdata["user_id"] = user_id
-            # Inject doc_texts for any step that may consume them
-            if doc_texts:
-                tdata.setdefault("doc_texts", doc_texts)
-            # Extraction: hydrate keys from search_set if not already present
-            if tname == "Extraction" and not tdata.get("keys"):
-                ss_uuid = tdata.get("search_set_uuid")
-                if ss_uuid:
-                    from app.models.search_set import SearchSetItem
-                    items = await SearchSetItem.find(
-                        {"searchset": ss_uuid, "searchtype": "extraction"},
-                    ).to_list()
-                    tdata["keys"] = [it.searchphrase for it in items]
-            tasks_out.append({"name": tname, "data": tdata})
-        steps_data.append({
-            "name": sname,
-            "data": step.get("data") or {},
-            "tasks": tasks_out,
-        })
-    return steps_data
 
 
 # ---------------------------------------------------------------------------

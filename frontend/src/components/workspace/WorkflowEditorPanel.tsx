@@ -14,6 +14,7 @@ import {
 import { useWorkspace } from '../../contexts/WorkspaceContext'
 import { useToast } from '../../contexts/ToastContext'
 import { useAuth } from '../../hooks/useAuth'
+import { withAdminRemedy } from '../../utils/truncationWarning'
 import { useShareLink } from '../../lib/shareLink'
 import { useConfirm } from '../shared/useConfirm'
 import { getProjectDocuments } from '../../api/projects'
@@ -1911,6 +1912,8 @@ function StepLastRunOutput({ step, stepsOutput, lastRunMeta }: {
   stepsOutput?: Record<string, unknown> | null
   lastRunMeta?: { finishedAt: string | null; status: string } | null
 }) {
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin === true
   const [expanded, setExpanded] = useState(true)
 
   // Find this step's entry: match on the original step_name stored in the
@@ -1932,7 +1935,9 @@ function StepLastRunOutput({ step, stepsOutput, lastRunMeta }: {
   // The combined/aggregated value across this step's parallel tasks
   // (mirror backend _step_output_value: formatted_output || output).
   const value = entry ? (entry.formatted_output ?? entry.output) : undefined
-  const warning = entry && typeof entry.warning === 'string' ? (entry.warning as string) : null
+  // The stored warning names only remedies any user can act on; admins also
+  // see the System Config remedy for an output-cap cut-off.
+  const warning = entry && typeof entry.warning === 'string' ? withAdminRemedy(entry.warning as string, isAdmin) : null
   const fillReport = entry && Array.isArray(entry.fill_report) ? (entry.fill_report as FillReportField[]) : null
   const hasValue = value !== undefined && value !== null && value !== ''
   const taskCount = step.tasks.length
@@ -5053,7 +5058,7 @@ function TaskEditModal({ task, step, selectedDocUuids, workflow, workflowId, onC
                     padding: '8px 12px', fontSize: 12, color: '#92400e',
                   }}>
                     <AlertTriangle style={{ width: 14, height: 14, flexShrink: 0, marginTop: 1 }} />
-                    <div>{testWarning}</div>
+                    <div>{withAdminRemedy(testWarning, user?.is_admin === true)}</div>
                   </div>
                 )}
                 {(() => {
@@ -5373,13 +5378,15 @@ function WorkflowOutputCard({ status, sessionId, workflowName, running, runElaps
     ].join('\n')
   }
 
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin === true
   // Steps can attach a warning under steps_output[step].warning (e.g. a KB
   // query that matched nothing, or a misconfigured lookup). Surface it so a
   // run that "succeeded" on thin context doesn't read as a clean pass.
   const stepWarnings = Object.entries((status?.steps_output ?? {}) as Record<string, unknown>)
     .map(([step, val]) => {
       const warning = val && typeof val === 'object' ? (val as Record<string, unknown>).warning : undefined
-      return typeof warning === 'string' && warning ? { step, warning } : null
+      return typeof warning === 'string' && warning ? { step, warning: withAdminRemedy(warning, isAdmin) } : null
     })
     .filter((x): x is { step: string; warning: string } => x !== null)
 

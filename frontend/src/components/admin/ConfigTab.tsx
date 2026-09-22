@@ -146,6 +146,10 @@ export function ConfigTab() {
 
   // Endpoints
   const [ocrEndpoint, setOcrEndpoint] = useState('')
+  // One hostname per line; parsed on save. The env-provided list is shown
+  // read-only beside it so the admin sees the whole effective policy.
+  const [allowedHosts, setAllowedHosts] = useState('')
+  const [envAllowedHosts, setEnvAllowedHosts] = useState<string[]>([])
   const [ocrApiKey, setOcrApiKey] = useState('')
   // Tracks whether the user actually edited the key field (vs. it merely
   // holding the load's initial value). Only a dirty key is sent on save —
@@ -234,6 +238,8 @@ export function ConfigTab() {
     return getSystemConfig().then(c => {
       setCfg(c)
       setOcrEndpoint(c.ocr_endpoint || '')
+      setAllowedHosts((c.outbound_url_allowed_hosts || []).join('\n'))
+      setEnvAllowedHosts(c.outbound_url_env_allowed_hosts || [])
       setOcrApiKey(c.ocr_api_key || '')
       setOcrApiKeyDirty(false)
       setOcrProvider(c.ocr_provider === 'docling' ? 'docling' : 'raw')
@@ -353,6 +359,7 @@ export function ConfigTab() {
           },
         },
         ocr_endpoint: ocrEndpoint,
+        outbound_url_allowed_hosts: allowedHosts.split(/[\n,]/).map(h => h.trim()).filter(Boolean),
         ocr_provider: ocrProvider,
         ocr_options: parsedOcrOptions,
         ocr_async: ocrAsync,
@@ -772,6 +779,27 @@ ${playgroundResult.request.user_prompt}`}
                 {ocrTestResult.ok ? <CheckCircle2 size={14} aria-hidden="true" style={{ verticalAlign: -2, marginRight: 4 }} /> : <XCircle size={14} aria-hidden="true" style={{ verticalAlign: -2, marginRight: 4 }} />}
                 {ocrTestResult.message}
               </span>
+            )}
+          </div>
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
+            <label style={labelStyle} htmlFor="allowed-private-hosts">Allowed private hosts</label>
+            <textarea
+              id="allowed-private-hosts" rows={3} spellCheck={false}
+              value={allowedHosts}
+              onChange={e => setAllowedHosts(e.target.value)}
+              placeholder={'mindrouter.example.edu\ndata-api.example.edu'}
+              style={{ ...inputStyle, maxWidth: 500, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, lineHeight: 1.5 }}
+            />
+            <div style={hintStyle}>
+              Workflow API Call and Fetch steps, automation callbacks and credential token endpoints refuse any URL that
+              resolves to a private address, so a workflow cannot be pointed at this server’s own services. List one exact
+              hostname per line to let a specific on-campus service through — only that name is exempted; everything else on
+              its network stays blocked. No wildcards, ports or paths. Changes are audit-logged and take effect immediately.
+            </div>
+            {envAllowedHosts.length > 0 && (
+              <div style={{ ...hintStyle, marginTop: 6 }}>
+                Also allowed by the server operator (<code>OUTBOUND_URL_ALLOWED_HOSTS</code>): {envAllowedHosts.join(', ')}
+              </div>
             )}
           </div>
         </div>

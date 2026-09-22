@@ -114,7 +114,8 @@
       "  **Step 2** — Prompt: Write a prompt that analyzes the extracted subaward data and identifies key obligations and deadlines.",
       "  **Step 3** — Formatter: Format the analysis into a structured compliance summary report.",
       "Run the workflow against **subaward-agreement.pdf**.",
-      "Verify the pipeline chains correctly: extraction → analysis → formatted report."
+      "Verify the pipeline chains correctly: extraction → analysis → formatted report.",
+      "Why Extraction first here: the terms you want are fixed fields the lab checks one by one, and the point of this lab is to chain three steps. Extraction is optional and task-dependent — a short or context-heavy document can go straight to a Prompt that reads the whole file (the first step receives the document automatically). See Module 3’s lesson on the extract-reason-deliver pattern."
     ],
     "expected_fields": [
       "Prime Recipient", "Subrecipient", "Subaward Amount", "Performance Period",
@@ -169,7 +170,8 @@
       "  **Step 2** — Prompt: Summarize the progress and highlight key achievements.",
       "  **Step 3** — Document Renderer or Data Export: Produce a downloadable report or CSV export.",
       "Run the workflow against **progress-report-year2.pdf**.",
-      "Download the output file and verify it contains the extracted data."
+      "Download the output file and verify it contains the extracted data.",
+      "Extraction is optional: for a short or context-heavy document, a Prompt reading the whole file can replace Steps 1 and 2, and the Step 3 output node builds the deliverable the same way."
     ],
     "expected_fields": [
       "Project Title", "PI Name", "Reporting Period", "Accomplishments",

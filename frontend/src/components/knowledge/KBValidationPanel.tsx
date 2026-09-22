@@ -55,8 +55,13 @@ type KBHistoryItem = {
   num_test_queries?: number | null
   mode?: string | null
   created_at?: string | null
+  source?: string | null
   result_snapshot?: KBValidationResult | null
 }
+
+/** A run over hand-picked queries ("Run selected") is a smoke test — it
+ * must never stand in for the KB's quality score in the header. */
+const isSmokeTest = (h: KBHistoryItem) => h.source === 'smoke_test'
 
 const TAB_LABELS: { id: Tab; label: string; icon?: typeof Sparkles }[] = [
   { id: 'autovalidate', label: 'Validate', icon: Sparkles },
@@ -76,6 +81,9 @@ type LatestQualitySummary = {
   breakdown: string | null
   answerAccuracy: number | null
   judgeModel: string | null
+  // The tuned answer model could not be used (removed from System Config);
+  // the score came from ``used`` and must not be read as the tuned config's.
+  answerModelFallback: { configured: string; used: string } | null
   numQueries: number | null
   mode: string | null
   createdAt: string | null
@@ -136,13 +144,14 @@ export function KBValidationPanel({ kbUuid, kbReady, canManage, kbHasSources = t
   }, [kbUuid])
 
   const applyLatestQuality = useCallback((history: KBHistoryItem[]) => {
-    const last = history[0]
+    const last = history.find(h => !isSmokeTest(h))
     const snap = last?.result_snapshot ?? null
     setLatestQuality(last?.score != null ? {
       score: Number(last.score),
       breakdown: snap ? describeKBScoreWithValues(explainKBScore(snap).components) : null,
       answerAccuracy: snap?.retrieval_precision?.avg_judge_score ?? null,
       judgeModel: last.judge_model ?? null,
+      answerModelFallback: snap?.answer_model_fallback ?? null,
       numQueries: last.num_queries_judged ?? last.num_test_queries ?? null,
       mode: last.mode ?? null,
       createdAt: last.created_at ?? null,
@@ -163,7 +172,7 @@ export function KBValidationPanel({ kbUuid, kbReady, canManage, kbHasSources = t
   // even though the server finished and persisted the run (it only surfaced
   // later in History). Instead we enqueue the Celery task and poll the quality
   // history until the new ValidationRun lands, then render its full snapshot.
-  const runValidation = useCallback(async (mode: KBValidationMode) => {
+  const runValidation = useCallback(async (mode: KBValidationMode, queryUuids?: string[]) => {
     setRunning(true)
     setRunError(null)
     try {
@@ -177,7 +186,10 @@ export function KBValidationPanel({ kbUuid, kbReady, canManage, kbHasSources = t
         // Non-fatal — worst case we match the first completed run we see.
       }
 
-      await runKBValidationAsync(kbUuid, { mode })
+      await runKBValidationAsync(
+        kbUuid,
+        queryUuids ? { mode, query_uuids: queryUuids } : { mode },
+      )
 
       const deadline = Date.now() + MAX_POLL_MS
       let result: KBValidationResult | null = null
@@ -267,6 +279,12 @@ export function KBValidationPanel({ kbUuid, kbReady, canManage, kbHasSources = t
       parts.push(`answer accuracy ${(latestQuality.answerAccuracy * 100).toFixed(0)}%`)
     }
     if (latestQuality.judgeModel) parts.push(`judged by ${latestQuality.judgeModel}`)
+    if (latestQuality.answerModelFallback) {
+      parts.push(
+        `answered by ${latestQuality.answerModelFallback.used}, not the tuned `
+        + `${latestQuality.answerModelFallback.configured} (no longer in System Config)`,
+      )
+    }
     if (latestQuality.numQueries != null) parts.push(`on ${latestQuality.numQueries} queries`)
     if (latestQuality.mode) parts.push(`(${latestQuality.mode})`)
     if (latestQuality.createdAt) {
@@ -343,6 +361,17 @@ export function KBValidationPanel({ kbUuid, kbReady, canManage, kbHasSources = t
             }}
           >
             {provenance}
+          </span>
+        )}
+        {latestQuality?.answerModelFallback && (
+          <span
+            title={`The applied optimization pins ${latestQuality.answerModelFallback.configured}, which is no longer in System Config. This score was answered by ${latestQuality.answerModelFallback.used}. Re-run Autovalidate or revert the optimization to clear this.`}
+            style={{
+              fontSize: 10, color: '#f59e0b',
+              maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            tuned model unavailable · answered by {shortenModel(latestQuality.answerModelFallback.used)}
           </span>
         )}
         {collapsed && running && (
@@ -429,6 +458,13 @@ export function KBValidationPanel({ kbUuid, kbReady, canManage, kbHasSources = t
           canManage={canManage}
           queries={queries}
           onChange={refreshQueries}
+          running={running}
+          onRunSelected={uuids => {
+            // A smoke test: judge only, no baseline, so it costs what the
+            // handful of questions costs. Results land on the Run tab.
+            setTab('run')
+            void runValidation('judge', uuids)
+          }}
         />
       ) : tab === 'run' ? (
         <KBValidationRunTab

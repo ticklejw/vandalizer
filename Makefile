@@ -207,14 +207,18 @@ security:
 #   switched on "later" — which is how the existing HIGH backlog became
 #   invisible in the first place.
 #
-#   --ignore-unfixed is load-bearing, not a loophole. python:3.12-slim carries
-#   four CRITICAL perl-base CVEs that Debian has published no fix for
-#   (CVE-2026-13221, -42496, -57433, -8376). A gate that fails on those cannot
-#   be made to pass by any action a developer can take, so it would be disabled
-#   or bypassed within a week and would protect nothing. `make security` still
-#   reports them; the *gate* is scoped to what someone can actually act on.
-#   Track the unfixed ones by rebasing the image when Debian ships fixes, or by
-#   moving off a base that ships perl at all.
+#   --ignore-unfixed is load-bearing, not a loophole. A CVE Debian has published
+#   no fix for cannot be made to pass by any action a developer can take, so a
+#   gate that fails on it would be disabled or bypassed within a week and would
+#   protect nothing. `make security` still reports them; the *gate* is scoped
+#   to what someone can actually act on.
+#
+#   The image loop scans the upstream tags, not what we build, and Debian ships
+#   fixes before Docker rebuilds those tags (2026-09-16: three perl-base CVEs
+#   went from unfixed to fixed while python:3.12-slim was still the 09-02
+#   build). backend/Dockerfile runs `apt-get upgrade` so the shipped image has
+#   the fix; the gap in the upstream tag is recorded in .trivyignore.yaml, each
+#   entry with an expiry so it fails loudly if the rebuild never comes.
 #
 #   HIGH stays advisory *for now*, matching the backend-typecheck / backend-audit
 #   convention above. The difference from before is that it is now reported
@@ -222,11 +226,14 @@ security:
 #   HIGH findings, and pip-audit's twenty-nine sat in a non-blocking target
 #   nobody read. Tighten `--severity` here to HIGH,CRITICAL once the backlog is
 #   worked down.
+#   The ignore file is named explicitly: Trivy auto-loads a plain `.trivyignore`
+#   but not the YAML form, and only the YAML form carries an expiry.
+TRIVY_IGNOREFILE := .trivyignore.yaml
 security-gate:
-	$(TRIVY) fs --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .
+	$(TRIVY) fs --scanners vuln --severity CRITICAL --ignore-unfixed --ignorefile $(TRIVY_IGNOREFILE) --exit-code 1 .
 	$(TRIVY) fs --scanners secret --exit-code 1 .
 	@for img in $(RUNTIME_IMAGES); do \
-		$(TRIVY) image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 "$$img" || exit 1; \
+		$(TRIVY) image --scanners vuln --severity CRITICAL --ignore-unfixed --ignorefile $(TRIVY_IGNOREFILE) --exit-code 1 "$$img" || exit 1; \
 	done
 	@printf "\nNo fixable CRITICAL vulnerabilities and no leaked secrets.\n"
 

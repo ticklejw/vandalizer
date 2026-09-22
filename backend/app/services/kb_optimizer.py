@@ -1913,3 +1913,73 @@ async def _is_cancelled(run_doc: KBOptimizationRun) -> bool:
         run_doc.cancel_requested = True
         return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Orphan-run recovery
+# ---------------------------------------------------------------------------
+
+#: ``tasks.kb.optimize_kb``'s hard ``time_limit`` plus a buffer -- the same
+#: shape as the workflow and extraction reapers. Past this no worker can still
+#: be on the run: it was SIGKILLed at the limit or lost its worker.
+STALE_RUN_TIMEOUT_SECONDS = 5460 + 240
+
+
+def _as_aware(dt: datetime.datetime | None) -> datetime.datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
+async def reap_one(run_doc: KBOptimizationRun | None) -> KBOptimizationRun | None:
+    """Recover a single orphaned run; no-op unless it's genuinely stuck.
+
+    A run left queued/running past the worker's hard time limit was killed
+    or lost its worker; nothing will ever finalize it. KB runs carry no
+    Celery task id, so there is nothing to revoke -- finalizing the doc is
+    the whole job. A run the user had already asked to cancel is finalized
+    as cancelled, not failed, so a worker dying before its next cancel check
+    does not turn a deliberate stop into a scary failure. Returns the
+    (possibly updated) run.
+    """
+    if run_doc is None or run_doc.status not in ("queued", "running"):
+        return run_doc
+
+    now = datetime.datetime.now(tz=datetime.timezone.utc)
+    started = _as_aware(run_doc.started_at)
+    if started is None or (now - started).total_seconds() <= STALE_RUN_TIMEOUT_SECONDS:
+        return run_doc
+
+    if run_doc.cancel_requested:
+        run_doc.status = "cancelled"
+        run_doc.phase = "cancelled"
+        run_doc.progress_message = "Cancelled (the worker did not respond)."
+    else:
+        run_doc.status = "failed"
+        run_doc.phase = "failed"
+        run_doc.error_message = (
+            "Optimization run abandoned — the worker crashed or was killed at "
+            "the hard time limit before it could record a result."
+        )
+    run_doc.completed_at = now
+    await run_doc.save()
+    logger.info("Reaped orphaned KB optimization run %s", run_doc.uuid)
+    return run_doc
+
+
+async def reap_stale_runs(kb_uuid: str) -> None:
+    """Reap every orphaned run for a knowledge base.
+
+    Called before starting a new run: the start path 409s on any non-terminal
+    run, so without a sweep a hard-limit-killed run blocked re-optimizing
+    the KB until the hourly janitor happened to fire (#835). Extraction and
+    workflow already sweep on start; this is the same sweep.
+    """
+    runs = await KBOptimizationRun.find(
+        KBOptimizationRun.kb_uuid == kb_uuid,
+        {"status": {"$in": ["queued", "running"]}},
+    ).to_list()
+    for run in runs:
+        await reap_one(run)

@@ -7,6 +7,7 @@ import {
   type KBValidationDetail,
 } from '../../api/knowledge'
 import { explainKBScore } from './kbScoreFormula'
+import { useIsAdmin } from '../../utils/truncationWarning'
 
 interface Props {
   kbReady: boolean
@@ -108,6 +109,20 @@ export function KBValidationRunTab({ kbReady, canManage, numQueries, latestRun, 
               {(['csv', 'xlsx', 'json'] as const).map(f => (
                 <ExportButton key={f} format={f} onExport={onExport} />
               ))}
+            </div>
+          )}
+
+          {latestRun.query_selection && (
+            <div
+              role="note"
+              style={{
+                fontSize: 11, color: '#fbbf24', padding: '6px 10px', marginBottom: 10,
+                backgroundColor: '#f59e0b14', border: '1px solid #f59e0b44', borderRadius: 6,
+              }}
+            >
+              Smoke test over {latestRun.query_selection.selected} of {latestRun.query_selection.total} test
+              queries. This score is for those questions only and does not change the KB's quality score.
+              The History export for this run holds just these questions.
             </div>
           )}
 
@@ -396,10 +411,14 @@ function DetailRow({
 }
 
 function TruncationNote({ what }: { what: string }) {
+  // Regular users cannot open Admin → System Config, so the remedy that lives
+  // there is shown to admins only; everyone else gets the fix they can make.
+  const isAdmin = useIsAdmin()
   return (
     <div style={{ fontSize: 11, color: '#f59e0b' }} role="note">
       {what} stopped at the model&apos;s output limit, so the judge scored an incomplete answer.
-      Raise “Response reserve (output tokens)” for this model under Admin → System Config → Models.
+      {' '}Shorter or more focused test queries fit within the limit.
+      {isAdmin && ' As an admin, you can also raise “Response reserve (output tokens)” for this model under Admin → System Config → Models.'}
     </div>
   )
 }

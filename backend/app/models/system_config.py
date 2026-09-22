@@ -228,6 +228,12 @@ class SystemConfig(Document):
     # Support contacts — list of {"user_id": ..., "email": ..., "name": ...}
     support_contacts: list[dict] = []
 
+    # Exact hostnames that server-side HTTP (workflow API Call / Fetch steps,
+    # automation callbacks, credential token endpoints) may reach even though
+    # they resolve to a private address. Merged with the operator's
+    # OUTBOUND_URL_ALLOWED_HOSTS env list; see app.utils.url_validation.
+    outbound_url_allowed_hosts: list[str] = []
+
     # Default team for new user auto-assignment
     default_team_id: Optional[str] = None
 

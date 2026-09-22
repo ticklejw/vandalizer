@@ -612,9 +612,9 @@ async def trigger_automation(
 
     # Validate callback_url if provided (SSRF protection)
     if callback_url:
-        from app.utils.url_validation import validate_outbound_url
+        from app.utils.url_validation import load_allowed_hosts, validate_outbound_url
         try:
-            validate_outbound_url(callback_url)
+            validate_outbound_url(callback_url, allowed_hosts=await load_allowed_hosts())
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Invalid callback_url: {e}")
 

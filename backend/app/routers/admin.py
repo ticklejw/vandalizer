@@ -24,6 +24,7 @@ from app.services.name_conflicts import (
 )
 from app.services.version_service import get_update_status
 from app.utils.encryption import decrypt_value, encrypt_value
+from app.utils import url_validation
 from app.models.team import Team, TeamMembership
 from app.models.user import User
 from app.models.document import SmartDocument
@@ -282,6 +283,7 @@ class ConfigUpdateRequest(BaseModel):
     llm_endpoint: Optional[str] = None
     default_team_id: Optional[str] = None
     support_contacts: Optional[list[dict]] = None
+    outbound_url_allowed_hosts: Optional[list[str]] = None
 
 
 class AdminTeamItem(BaseModel):
@@ -361,6 +363,11 @@ class OAuthProviderRequest(BaseModel):
     client_secret: str = ""
     redirect_uri: Optional[str] = None
     enabled: bool = True
+    # When False, SSO logins for identities with no existing account are
+    # denied instead of auto-created (JIT provisioning off). Plain bool with
+    # a default on purpose: model_dump(exclude_none=True) then always stores
+    # it, so the full-replace update handler can't drop it.
+    jit_provisioning: bool = True
     tenant_id: Optional[str] = None
     metadata_url: Optional[str] = None
     entity_id: Optional[str] = None
@@ -1488,6 +1495,10 @@ async def get_config(
         "support_contacts": cfg.support_contacts,
         "compliance_config": cfg.get_compliance_config(),
         "retention_config": cfg.get_retention_config(),
+        "outbound_url_allowed_hosts": list(getattr(cfg, "outbound_url_allowed_hosts", None) or []),
+        # Read-only: what the operator allowed via env, shown beside the
+        # editable list so an admin can see the whole effective policy.
+        "outbound_url_env_allowed_hosts": sorted(url_validation.env_allowed_hosts()),
     }
 
 
@@ -1546,14 +1557,49 @@ async def update_config(
         cfg.default_team_id = body.default_team_id or None
     if body.support_contacts is not None:
         cfg.support_contacts = body.support_contacts
+    hosts_audit: dict | None = None
+    if body.outbound_url_allowed_hosts is not None:
+        # Each entry is one deliberate exemption from the SSRF block, so a
+        # malformed one is a 400 naming it, not a silent trim: an exemption
+        # that never matches would leave the admin as blocked as before,
+        # with no clue why.
+        try:
+            hosts = _normalize_allowed_hosts(body.outbound_url_allowed_hosts)
+        except url_validation.InvalidAllowedHost as e:
+            raise HTTPException(status_code=400, detail=f"Allowed private hosts: {e}")
+        if hosts != list(cfg.outbound_url_allowed_hosts or []):
+            hosts_audit = {"before": list(cfg.outbound_url_allowed_hosts or []), "after": hosts}
+        cfg.outbound_url_allowed_hosts = hosts
 
     cfg.updated_at = datetime.datetime.now(datetime.timezone.utc)
     cfg.updated_by = user.user_id
     await cfg.save()
     clear_agent_caches()
     await _audit(user, "update_config", "Updated system configuration")
+    if hosts_audit is not None:
+        # Its own entry: this widens what the server will fetch on a
+        # workflow author's behalf, so it must be findable in the audit log
+        # by name rather than buried in a generic config update.
+        await _audit(
+            user, "update_outbound_allowed_hosts",
+            "Changed the private-address hosts outbound requests may reach: "
+            f"{', '.join(hosts_audit['after']) or '(none)'}",
+            hosts_audit,
+        )
 
     return {"status": "ok"}
+
+
+def _normalize_allowed_hosts(entries: list[str]) -> list[str]:
+    """Canonicalise and de-duplicate, preserving the admin's order."""
+    out: list[str] = []
+    for entry in entries:
+        if not (entry or "").strip():
+            continue  # a blank line in the textarea is not an error
+        host = url_validation.normalize_allowed_host(entry)
+        if host not in out:
+            out.append(host)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1946,16 +1992,38 @@ async def parse_saml_metadata(
         raise HTTPException(status_code=400, detail=f"Could not read IdP metadata: {e}")
 
     idp = data.get("idp", {}) if isinstance(data, dict) else {}
+
+    # The parser flattens to "x509cert" only when one cert serves both
+    # signing and encryption. IdPs that publish distinct certs (standard for
+    # Shibboleth) come back as x509certMulti instead — take the signing certs
+    # from there. Multiple signing certs mean a key rollover is in progress;
+    # the first is used and the rest are surfaced so the admin can swap if
+    # logins fail against the newer key.
+    signing_certs = [c for c in [idp.get("x509cert", "")] if c]
+    if not signing_certs:
+        signing_certs = (idp.get("x509certMulti") or {}).get("signing") or []
+
     result = {
         "idp_entity_id": idp.get("entityId", ""),
         "idp_sso_url": (idp.get("singleSignOnService") or {}).get("url", ""),
-        "idp_x509_cert": idp.get("x509cert", ""),
+        "idp_x509_cert": signing_certs[0] if signing_certs else "",
     }
     if not all(result.values()):
+        missing = [
+            label
+            for key, label in [
+                ("idp_entity_id", "entityID"),
+                ("idp_sso_url", "HTTP-Redirect SSO URL"),
+                ("idp_x509_cert", "signing certificate"),
+            ]
+            if not result[key]
+        ]
         raise HTTPException(
             status_code=422,
-            detail="Metadata is missing an entityID, HTTP-Redirect SSO URL, or signing certificate.",
+            detail=f"Metadata is missing: {', '.join(missing)}.",
         )
+    if len(signing_certs) > 1:
+        result["idp_x509_cert_alternates"] = signing_certs[1:]
     return result
 
 

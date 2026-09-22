@@ -255,6 +255,7 @@ Key notes:
 - **`MONGO_HOST`**: Use the Docker service name (`mongo`) if running in Docker Compose, or the hostname/IP of your MongoDB instance if externalized.
 - **`UPLOAD_DIR`**: Directory where user-uploaded documents are stored. Must be a persistent volume.
 - **`FRONTEND_URL`**: The public URL users will access. Used for CORS and redirect configuration.
+- **`OUTBOUND_URL_ALLOWED_HOSTS`** (optional): Server-side HTTP from workflow API Call / Fetch steps, automation callbacks and credential token endpoints refuses any URL that resolves to a private, loopback or link-local address. If a workflow needs to call a service that only has such an address -- an institutional LLM router on the campus network, say -- a superadmin can list its exact hostname under Admin → System Config → Endpoints → Allowed private hosts (takes effect immediately, audit-logged), or an operator can set it here (comma-separated for several; restart the api and celery containers after changing it). The two lists are merged. The match is on the hostname, not the address, so nothing else on that network is opened up, and the cloud metadata hostnames can never be exempted.
 - **`CHROMADB_HOST`**: Hostname:port of the Chroma server. Required for any multi-process deployment — the Python `PersistentClient` is not process-safe for concurrent writers, so FastAPI workers + Celery workers sharing a persist directory will hit "attempt to write a readonly database" errors. Leave unset only for single-process local development.
 
 ### LLM Configuration

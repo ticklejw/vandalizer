@@ -247,6 +247,15 @@ export type KBValidationResult = {
   num_sources: number
   mode?: KBValidationMode
   judge_model?: string | null
+  /** Set when the run covered hand-picked queries only ("Run selected").
+   *  ``selected`` is what ran; ``requested`` (newer runs) is what was asked
+   *  for — the route now refuses a mismatch, so they agree on new rows. */
+  query_selection?: { selected: number; requested?: number; total: number } | null
+  /** The model that generated the graded answers (absent on older runs). */
+  answer_model?: string | null
+  /** Set when the KB's applied override named a model System Config no
+   *  longer has, so the user's model answered instead of the tuned one. */
+  answer_model_fallback?: { configured: string; used: string; reason?: string } | null
   source_health: {
     total: number
     healthy: number
@@ -301,9 +310,17 @@ export type KBValidationResult = {
   } | null
 }
 
+export type KBValidationRunOptions = {
+  mode?: KBValidationMode
+  skip_judge?: boolean
+  /** Run only these test queries — a smoke test. The run lands in history
+   *  and exports like any other but never becomes the KB's quality score. */
+  query_uuids?: string[]
+}
+
 export function runKBValidation(
   uuid: string,
-  options?: { mode?: KBValidationMode; skip_judge?: boolean },
+  options?: KBValidationRunOptions,
 ) {
   return apiFetch<KBValidationResult>(`/api/knowledge/${uuid}/validate`, {
     method: 'POST',
@@ -313,7 +330,7 @@ export function runKBValidation(
 
 export function runKBValidationAsync(
   uuid: string,
-  options?: { mode?: KBValidationMode; skip_judge?: boolean },
+  options?: KBValidationRunOptions,
 ) {
   return apiFetch<{ task_id: string; status: 'queued' }>(`/api/knowledge/${uuid}/validate`, {
     method: 'POST',

@@ -129,6 +129,7 @@ function makeConfig(overrides: Partial<SystemConfigData> = {}): SystemConfigData
     ],
     default_model: 'gpt-4o',
     ocr_endpoint: 'https://ocr.example.edu',
+    outbound_url_allowed_hosts: [],
     ocr_api_key: '***',
     ocr_provider: 'raw' as const,
     ocr_options: {},
@@ -296,6 +297,44 @@ describe('ConfigTab — OCR provider', () => {
 
     await screen.findByText(/Docling-Serve health check returned 404/)
     expect(mockTestOcr.mock.calls[0][0]).toMatchObject({ ocr_provider: 'docling' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 1c. Allowed private hosts (SSRF exemptions managed in-app)
+// ---------------------------------------------------------------------------
+
+describe('ConfigTab — allowed private hosts', () => {
+  it('round-trips the stored list one host per line and shows the operator env list read-only', async () => {
+    mockGetSystemConfig.mockResolvedValue(makeConfig({
+      outbound_url_allowed_hosts: ['mindrouter.example.edu', 'data-api.example.edu'],
+      outbound_url_env_allowed_hosts: ['legacy.example.edu'],
+    }))
+    await renderConfigTab()
+
+    const field = screen.getByLabelText('Allowed private hosts') as HTMLTextAreaElement
+    expect(field.value).toBe('mindrouter.example.edu\ndata-api.example.edu')
+    expect(screen.getByText(/Also allowed by the server operator/)).toHaveTextContent('legacy.example.edu')
+  })
+
+  it('saves the hosts as a trimmed list, accepting newline or comma separators', async () => {
+    await renderConfigTab()
+
+    fireEvent.change(screen.getByLabelText('Allowed private hosts'), {
+      target: { value: ' mindrouter.example.edu \n\ndata-api.example.edu, third.example.edu\n' },
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /Save Configuration/i })[0])
+
+    await waitFor(() => expect(mockUpdateSystemConfig).toHaveBeenCalledTimes(1))
+    const payload = mockUpdateSystemConfig.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.outbound_url_allowed_hosts).toEqual([
+      'mindrouter.example.edu', 'data-api.example.edu', 'third.example.edu',
+    ])
+  })
+
+  it('does not mention the env list when the operator set none', async () => {
+    await renderConfigTab()
+    expect(screen.queryByText(/Also allowed by the server operator/)).not.toBeInTheDocument()
   })
 })
 

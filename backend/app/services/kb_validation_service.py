@@ -15,7 +15,12 @@ from app.models.kb_test_query import KBTestQuery
 from app.models.knowledge import KnowledgeBase, KnowledgeBaseSource
 from app.services.document_manager import DocumentManager
 from app.services.extraction_judge import JUDGE_UNAVAILABLE
-from app.services.llm_service import RAG_SYSTEM_PROMPT, capture_truncation, get_agent_model
+from app.services.llm_service import (
+    RAG_SYSTEM_PROMPT,
+    _get_model_config_sync,
+    capture_truncation,
+    get_agent_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +372,32 @@ def _format_retrieved_context(results: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+async def _configured_model_name(model_name: str | None) -> str | None:
+    """Return the System Config name for ``model_name``, or None when no
+    configured model has that name or tag.
+
+    An applied ``rag_config_override`` pins the answer model by name, and that
+    name outlives the admin's model list: a model renamed or removed in System
+    Config leaves the override pointing at nothing. Such a name still builds
+    an agent — with no API key and the global endpoint — so every answer call
+    fails and the judge grades the empty string it left behind. Returns None
+    when the SystemConfig could not be loaded at all, so a transient config
+    outage does not read as "the model is gone".
+    """
+    if not model_name:
+        return None
+    await _ensure_system_config_loaded()
+    doc = _active_system_config_doc.get()
+    if not doc:
+        return model_name
+    if _get_model_config_sync(model_name, doc) is not None:
+        return model_name
+    for m in doc.get("available_models") or []:
+        if isinstance(m, dict) and m.get("tag") == model_name and m.get("name"):
+            return m["name"]
+    return None
+
+
 async def _resolve_rag_config(kb_uuid: str, explicit: Optional[RAGConfig], k: int) -> RAGConfig:
     """Pick the RAGConfig to use for a query.
 
@@ -376,6 +407,10 @@ async def _resolve_rag_config(kb_uuid: str, explicit: Optional[RAGConfig], k: in
          for normal user-facing queries on KBs with an applied optimization.
       3. Default config built from the legacy ``k`` argument — preserves
          pre-Autovalidate behaviour exactly.
+
+    An override ``model`` that no longer exists in System Config is dropped
+    (the caller's model applies) rather than honoured: the tuned retrieval
+    knobs still apply, and the run records which model actually answered.
     """
     if explicit is not None:
         return explicit
@@ -384,7 +419,18 @@ async def _resolve_rag_config(kb_uuid: str, explicit: Optional[RAGConfig], k: in
         override = getattr(kb, "rag_config_override", None) if kb else None
         if isinstance(override, dict) and override:
             try:
-                return RAGConfig(**override)
+                cfg = RAGConfig(**override)
+                if cfg.model:
+                    resolved = await _configured_model_name(cfg.model)
+                    if resolved != cfg.model:
+                        if resolved is None:
+                            logger.warning(
+                                "rag_config_override on KB %s names model %r, which is "
+                                "not in System Config; answering with the caller's model",
+                                kb_uuid, cfg.model,
+                            )
+                        cfg = cfg.with_overrides(model=resolved)
+                return cfg
             except Exception as e:
                 logger.warning(
                     "rag_config_override on KB %s is invalid (%s); using defaults",
@@ -567,13 +613,13 @@ async def _generate_kb_answer(
         f"Retrieved context:\n{context}\n\n"
         f"{instruction}"
     )
-    try:
-        run = await agent.run(user_prompt)
-        answer = (run.output or "").strip()
-        tokens += _usage_tokens(run)
-    except Exception as e:
-        logger.exception("KB RAG answer generation failed for %s: %s", kb_uuid, e)
-        answer = ""
+    # A failed generation propagates. ``judge_test_queries`` turns it into a
+    # SKIPPED row that carries the error and no score. Swallowing it into ""
+    # had the judge grade an empty string as a FAIL — a provider outage or a
+    # stale model name then read as "the knowledge base answers nothing".
+    run = await agent.run(user_prompt)
+    answer = (run.output or "").strip()
+    tokens += _usage_tokens(run)
     return answer, results, tokens
 
 
@@ -997,6 +1043,7 @@ async def judge_test_queries(
                 return {
                     "query_uuid": getattr(tq, "uuid", ""),
                     "external_id": getattr(tq, "external_id", None) or "",
+                    "notes": getattr(tq, "notes", None) or "",
                     "expected_answer": getattr(tq, "expected_answer", None) or "",
                     "query": tq.query,
                     "category": getattr(tq, "category", None),
@@ -1019,11 +1066,16 @@ async def judge_test_queries(
                 return {
                     "query_uuid": getattr(tq, "uuid", ""),
                     "external_id": getattr(tq, "external_id", None) or "",
+                    "notes": getattr(tq, "notes", None) or "",
                     "expected_answer": getattr(tq, "expected_answer", None) or "",
                     "query": tq.query,
                     "category": getattr(tq, "category", None),
                     "actual_answer": "",
                     "baseline_answer": None,
+                    # What broke, in the row itself: the export's ``error``
+                    # column reads this, so a run full of unmeasured queries
+                    # says why instead of showing blank answers.
+                    "error": f"answer generation failed: {str(e)[:200]}",
                     "judge": {
                         # Keeps the accurate label — this catches a retrieval
                         # failure as readily as a judge one — while the missing
@@ -1381,6 +1433,13 @@ async def check_source_health(kb_uuid: str) -> dict:
             except Exception as e:
                 entry["status"] = "unhealthy"
                 entry["error"] = str(e)[:200]
+            # Fetch-time caveats (hidden_text_unchecked) are not a health
+            # failure — the page is reachable and fully indexed — but the
+            # report carries them so a reviewer sees which sources hold
+            # text the hidden-text defense never inspected.
+            source_warnings = list(getattr(source, "warnings", None) or [])
+            if source_warnings:
+                entry["warnings"] = source_warnings
         elif source.source_type == "document" and source.document_uuid:
             doc = await SmartDocument.find_one(SmartDocument.uuid == source.document_uuid)
             if not doc or not (doc.raw_text or "").strip():
@@ -1446,6 +1505,7 @@ def _query_identity(tq) -> dict:
     return {
         "query_uuid": getattr(tq, "uuid", "") or "",
         "external_id": getattr(tq, "external_id", None) or "",
+        "notes": getattr(tq, "notes", None) or "",
         "expected_answer": getattr(tq, "expected_answer", None) or "",
         "category": getattr(tq, "category", None),
     }
@@ -1625,6 +1685,7 @@ async def run_kb_validation(
     mode: str = "judge",
     skip_judge: bool = False,
     model: Optional[str] = None,
+    query_uuids: Optional[list[str]] = None,
 ) -> dict:
     """Run full validation on a knowledge base.
 
@@ -1646,6 +1707,12 @@ async def run_kb_validation(
     default, so "validate this KB under model X" actually measures model X.
     The judge model is unaffected. When None, legacy resolution applies
     (applied config model, else the user's model).
+
+    ``query_uuids`` restricts the run to those test queries — a smoke test of
+    a few questions. The run is persisted with ``source=SMOKE_TEST_SOURCE``
+    and ``query_selection`` on the result, so it shows in history and
+    exports but never becomes the KB's quality score. Raises ``ValueError``
+    when none of the uuids belong to this KB.
     """
     kb = await KnowledgeBase.find_one(KnowledgeBase.uuid == kb_uuid)
     if not kb:
@@ -1657,6 +1724,23 @@ async def run_kb_validation(
     test_queries = await KBTestQuery.find(
         KBTestQuery.knowledge_base_uuid == kb_uuid,
     ).to_list()
+
+    query_selection: dict | None = None
+    if query_uuids is not None:
+        wanted = set(query_uuids)
+        total = len(test_queries)
+        test_queries = [q for q in test_queries if q.uuid in wanted]
+        if not test_queries:
+            raise ValueError("None of the selected test queries belong to this knowledge base")
+        # ``selected`` is what actually ran (existing readers: History's
+        # "selected n/N", exports); ``requested`` is what the caller asked for,
+        # so a selection that shrank because uuids were unknown is visible in
+        # the record rather than silently reported as the smaller run.
+        query_selection = {
+            "selected": len(test_queries),
+            "requested": len(query_uuids),
+            "total": total,
+        }
 
     health, coverage = await asyncio.gather(health_task, coverage_task)
 
@@ -1673,6 +1757,7 @@ async def run_kb_validation(
     # actually ran; a retrieval-only run has no task model to attribute.
     effective_answer_model: str | None = None
     answer_cfg: RAGConfig | None = None
+    answer_model_fallback: dict | None = None
     if test_queries and not skip_judge and any(getattr(q, "expected_answer", None) for q in test_queries):
         try:
             # Resolve the judge model. get_user_model_name validates the user's
@@ -1688,17 +1773,41 @@ async def run_kb_validation(
                 if model:
                     answer_cfg = answer_cfg.with_overrides(model=model)
                 effective_answer_model = answer_cfg.model or judge_model_used
+                # The applied override may name a model that System Config no
+                # longer has; resolution drops it and the user's model answers
+                # instead. Say so on the run, so the score is not read as the
+                # tuned configuration's.
+                override_model = (
+                    (kb.rag_config_override or {}).get("model")
+                    if isinstance(kb.rag_config_override, dict) else None
+                )
+                if (
+                    override_model and not model
+                    and await _configured_model_name(override_model) is None
+                ):
+                    answer_model_fallback = {
+                        "configured": override_model,
+                        "used": effective_answer_model,
+                        "reason": "not in System Config",
+                    }
+                # Pinning the resolved config makes the no-KB baseline use the
+                # same answer model as the KB answer (an applied override's
+                # model, else the user's), so lift measures the KB, not a swap.
                 judge_payload = await judge_test_queries(
                     kb_uuid, test_queries, judge_model_used, mode=mode,
-                    answer_config=answer_cfg if model else None,
+                    answer_config=answer_cfg,
                 )
                 # First-run variance sample: only when no prior ValidationRun exists for this KB.
                 from app.models.validation_run import ValidationRun
+                from app.services.quality_service import NOT_SMOKE_TEST
                 prior = await ValidationRun.find_one(
                     ValidationRun.item_kind == "knowledge_base",
                     ValidationRun.item_id == kb_uuid,
+                    NOT_SMOKE_TEST,
                 )
-                if prior is None:
+                # A smoke test's variance is never used (it is not the KB's
+                # score), so do not spend judge calls sampling it.
+                if prior is None and query_selection is None:
                     by_uuid = {q.uuid: q for q in test_queries}
                     variance_result = await _sample_judge_variance_detailed(
                         kb_uuid, judge_payload["details"], by_uuid, judge_model_used,
@@ -1742,6 +1851,8 @@ async def run_kb_validation(
                 det["baseline_judge"] = judge_det.get("baseline_judge")
                 det["lift"] = judge_det.get("lift")
                 det["discrimination"] = judge_det.get("discrimination")
+                if judge_det.get("error"):
+                    det["error"] = judge_det["error"]
         # Append details for judged queries that retrieval didn't cover (defensive).
         existing_uuids = {det.get("query_uuid") for det in retrieval.get("details", [])}
         for det in judge_payload["details"]:
@@ -1790,9 +1901,16 @@ async def run_kb_validation(
         "num_runs": 1,
         "mode": mode,
         "judge_model": judge_model_used,
+        # Set on a run over hand-picked queries: {"selected": n, "total": N}.
+        "query_selection": query_selection,
+        # Which model generated the graded answers, and whether it is the one
+        # the applied override asked for.
+        "answer_model": effective_answer_model if judge_payload else None,
+        "answer_model_fallback": answer_model_fallback if judge_payload else None,
     }
 
     # Persist the validation run
+    from app.models.validation_run import SMOKE_TEST_SOURCE
     from app.services.quality_service import compute_quality_tier, persist_validation_run
 
     vr = await persist_validation_run(
@@ -1810,10 +1928,12 @@ async def run_kb_validation(
                 "requested_model": model,
                 "judge_model": judge_model_used,
                 "answer_temperature": answer_cfg.answer_temperature if answer_cfg else None,
+                "answer_model_fallback": answer_model_fallback,
             }
             if judge_payload
             else None
         ),
+        source=SMOKE_TEST_SOURCE if query_selection else None,
     )
 
     # Surface the *certified* score (raw score after the low-sample-size

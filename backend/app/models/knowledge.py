@@ -33,6 +33,13 @@ class KnowledgeBaseSource(Document):
     # size cap — the source is "ready" but incomplete, so the UI shows a warning
     # rather than a clean check. Only set for URL sources.
     truncated: bool = False
+    # Caveats recorded by the last successful fetch that are not failures
+    # (``WebFetchResult.advisories``): currently ``"hidden_text_unchecked"``,
+    # a fetched PDF whose hidden-text scrub could not inspect the file, so its
+    # indexed text may include content the page never displays. Replaced —
+    # so cleared — by every later successful fetch. Rows from before this
+    # field existed read as empty. Only set for URL sources.
+    warnings: list[str] = Field(default_factory=list)
     # Crawl fields
     crawl_enabled: bool = False
     max_crawl_pages: int = 5

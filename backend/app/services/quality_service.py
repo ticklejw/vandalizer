@@ -9,7 +9,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 from app.models.system_config import SystemConfig  # noqa: E402
-from app.models.validation_run import ValidationRun  # noqa: E402
+from app.models.validation_run import SMOKE_TEST_SOURCE, ValidationRun  # noqa: E402
+
+# Query filter that leaves smoke-test runs out of every "latest run" read.
+# Missing/None ``source`` (legacy rows) passes.
+NOT_SMOKE_TEST = {"source": {"$ne": SMOKE_TEST_SOURCE}}
 from app.models.verification import VerifiedItemMetadata  # noqa: E402
 
 
@@ -43,8 +47,14 @@ async def persist_validation_run(
     model: Optional[str] = None,
     extraction_config: Optional[dict] = None,
     model_settings: Optional[dict] = None,
+    source: Optional[str] = None,
 ) -> ValidationRun:
-    """Create a ValidationRun from a validation result dict and update quality metadata."""
+    """Create a ValidationRun from a validation result dict and update quality metadata.
+
+    ``source`` tags the row's provenance (see ``ValidationRun.source``). A
+    ``SMOKE_TEST_SOURCE`` run is recorded but does not touch the item's
+    quality metadata — a few hand-picked queries are not its quality score.
+    """
     # Compute unified score
     accuracy = result.get("aggregate_accuracy")
     consistency = result.get("aggregate_consistency")
@@ -146,9 +156,13 @@ async def persist_validation_run(
         extraction_config=extraction_config or {},
         config_hash=cfg_hash,
         user_id=user_id,
+        source=source,
         created_at=datetime.datetime.now(tz=datetime.timezone.utc),
     )
     await vr.insert()
+
+    if source == SMOKE_TEST_SOURCE:
+        return vr
 
     # Update quality metadata on verified item
     await update_quality_metadata(item_kind, item_id, item_name=item_name)
@@ -276,6 +290,7 @@ async def update_quality_metadata(item_kind: str, item_id: str, item_name: str |
     run_count = await ValidationRun.find(
         ValidationRun.item_kind == item_kind,
         ValidationRun.item_id == item_id,
+        NOT_SMOKE_TEST,
     ).count()
 
     meta = await VerifiedItemMetadata.find_one(
@@ -523,11 +538,16 @@ async def get_latest_validation(
     item_kind: str,
     item_id: str,
 ) -> Optional[dict]:
-    """Return the most recent ValidationRun as dict, or None."""
+    """Return the most recent ValidationRun as dict, or None.
+
+    Skips smoke-test runs: a subset run is not the item's latest measurement
+    for regression baselines or headline scores.
+    """
     run = await (
         ValidationRun.find(
             ValidationRun.item_kind == item_kind,
             ValidationRun.item_id == item_id,
+            NOT_SMOKE_TEST,
         )
         .sort("-created_at")
         .limit(1)
@@ -542,6 +562,7 @@ async def get_quality_summary() -> dict:
     """Aggregate stats: avg score, total runs, validated vs unvalidated items."""
     # Use aggregation to avoid loading all runs into memory
     pipeline = [
+        {"$match": NOT_SMOKE_TEST},
         {"$group": {
             "_id": {"item_kind": "$item_kind", "item_id": "$item_id"},
             "latest_score": {"$last": "$score"},
@@ -595,7 +616,7 @@ async def get_quality_timeline(
     """Aggregate ValidationRun by date for timeline charts."""
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
 
-    query_filters = [ValidationRun.created_at >= cutoff]
+    query_filters = [ValidationRun.created_at >= cutoff, NOT_SMOKE_TEST]
     if item_kind:
         query_filters.append(ValidationRun.item_kind == item_kind)
     if item_id:
@@ -698,7 +719,7 @@ async def get_quality_by_model(days: int = 90) -> list[dict]:
     models are a visible coverage gap, not something to hide.
     """
     cutoff = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(days=days)
-    runs = await ValidationRun.find(ValidationRun.created_at >= cutoff).to_list()
+    runs = await ValidationRun.find(ValidationRun.created_at >= cutoff, NOT_SMOKE_TEST).to_list()
 
     by_model: dict[Optional[str], dict] = {}
     for r in runs:
@@ -1193,6 +1214,7 @@ async def get_quality_items(
             ValidationRun.find(
                 ValidationRun.item_kind == m.item_kind,
                 ValidationRun.item_id == m.item_id,
+                NOT_SMOKE_TEST,
             )
             .sort("-created_at")
             .limit(2)
@@ -1242,6 +1264,7 @@ async def get_quality_item_detail(item_kind: str, item_id: str) -> dict:
         ValidationRun.find(
             ValidationRun.item_kind == item_kind,
             ValidationRun.item_id == item_id,
+            NOT_SMOKE_TEST,
         )
         .sort("-created_at")
         .to_list()
@@ -1274,10 +1297,12 @@ async def get_quality_item_detail(item_kind: str, item_id: str) -> dict:
 
 
 async def _get_latest_run(item_kind: str, item_id: str) -> Optional[ValidationRun]:
+    """Newest full run — smoke-test runs never set the item's quality."""
     runs = await (
         ValidationRun.find(
             ValidationRun.item_kind == item_kind,
             ValidationRun.item_id == item_id,
+            NOT_SMOKE_TEST,
         )
         .sort("-created_at")
         .limit(1)
@@ -1331,4 +1356,9 @@ def _run_to_dict(r: ValidationRun) -> dict:
         # Provenance — Phase 4 unification. None for legacy runs.
         "source": getattr(r, "source", None),
         "source_run_uuid": getattr(r, "source_run_uuid", None),
+        # {"selected": n, "total": N} on a smoke-test run over chosen queries.
+        "query_selection": (
+            r.result_snapshot.get("query_selection")
+            if isinstance(r.result_snapshot, dict) else None
+        ),
     }
