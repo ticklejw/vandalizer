@@ -28,6 +28,10 @@ non-root frontend image by default).
 
 ## Quickstart
 
+The chart's default image tag is its `appVersion`. Until that release is
+published (the unprivileged frontend image first ships with it), pin
+`image.backend.tag` / `image.frontend.tag` to a published release.
+
 ```bash
 helm install vandalizer charts/vandalizer \
   --namespace vandalizer --create-namespace \
@@ -115,8 +119,9 @@ Every persistence block (`uploads`, `mongodb.persistence`,
 
 ## OpenShift
 
-The defaults comply with the restricted Pod Security Standard on vanilla
-Kubernetes. On OpenShift, drop the fsGroup/runAsUser pinning and let the SCC
+The application pods comply with the restricted Pod Security Standard on
+vanilla Kubernetes. The bundled ChromaDB runs as root, so a namespace that
+*enforces* `restricted` rejects it — use an external ChromaDB there. On OpenShift, drop the fsGroup/runAsUser pinning and let the SCC
 assign UIDs:
 
 ```yaml
@@ -166,7 +171,9 @@ org name, and seeds the workflow catalog. It never runs on upgrades because
 re-running it resets the admin password. Credentials come from
 `bootstrap.adminEmail`/`adminPassword` or `bootstrap.existingSecret` (keys
 `ADMIN_EMAIL`, `ADMIN_PASSWORD`, optionally `ADMIN_NAME`,
-`DEFAULT_TEAM_NAME`, `ORG_NAME`).
+`DEFAULT_TEAM_NAME`, `ORG_NAME`). The Secret the chart creates from
+`adminPassword` is a hook resource Helm never deletes, not even on
+uninstall — delete it after the first install, or prefer `existingSecret`.
 
 ## Scaling notes
 
@@ -202,8 +209,12 @@ Two things `helm uninstall` does on purpose that can surprise:
   behind `STORAGE_BACKEND=s3` but is incomplete and its dependency isn't in
   the shipped image; do not enable it.
 - Redis/ChromaDB/Mongo connections support no auth/TLS beyond what a Mongo
-  URI carries; the NetworkPolicy is the compensating control.
-- `/api/metrics` (Prometheus) is unauthenticated; the ServiceMonitor is off
-  by default and the frontend nginx only exposes `/api/`, so it is not
-  reachable through the default edge — but anything in-cluster that can reach
-  the api Service can scrape it.
+  URI carries; the NetworkPolicy is the compensating control. **Your CNI must
+  enforce NetworkPolicy** (Calico, Cilium, most managed CNIs — not plain
+  flannel): where it is ignored, any pod in the cluster can read the in-cluster
+  MongoDB, including users and the encrypted LLM credentials. Otherwise point
+  the chart at external datastores with credentials in the Mongo URI.
+- `/api/metrics` (Prometheus) is unauthenticated. The chart's frontend nginx
+  answers it with a 404, so it is not reachable through the default edge; with
+  split routing (ingress straight to the api Service) block it at the ingress
+  yourself. Anything in-cluster that can reach the api Service can scrape it.

@@ -216,7 +216,7 @@ TRIVY ?= trivy
 # absent: its packages never reach a shipped artifact, and including it would
 # put findings in front of reviewers that they cannot act on and should not
 # care about. Scan what runs in production.
-RUNTIME_IMAGES := python:3.12-slim nginx:alpine
+RUNTIME_IMAGES := python:3.12-slim nginx:alpine nginxinc/nginx-unprivileged:alpine
 
 security:
 	@printf "\n=== Dependencies, secrets, and config ===\n"
@@ -280,7 +280,7 @@ security-gate:
 # been scanned, so the finding count is unknown and a gate switched on blind
 # would either be vacuous or block the release pipeline on day one. Promote it
 # to security-gate once a few runs have established the real baseline.
-BUILT_IMAGES := vandalizer-backend vandalizer-frontend
+BUILT_IMAGES := vandalizer-backend vandalizer-frontend vandalizer-frontend-unprivileged
 
 security-built-images:
 	@for img in $(BUILT_IMAGES); do \

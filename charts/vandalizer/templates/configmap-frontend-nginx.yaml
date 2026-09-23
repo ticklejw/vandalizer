@@ -48,6 +48,12 @@ data:
             add_header Content-Type text/plain;
         }
 
+        # Prometheus metrics are unauthenticated; never serve them at the edge.
+        # Scrape the api Service directly (see values: serviceMonitor).
+        location = /api/metrics {
+            return 404;
+        }
+
         # Proxy API requests to the backend
         location /api/ {
             proxy_pass http://{{ include "vandalizer.fullname" . }}-api:8001;
