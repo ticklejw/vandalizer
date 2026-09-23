@@ -1507,3 +1507,54 @@ def test_quality_sort_adoption_orders_most_used_first():
     entries = [{"adoption_count": 1}, {"adoption_count": 7}, {}]
     entries.sort(key=lambda e: -(e.get("adoption_count") or 0))
     assert [e.get("adoption_count") for e in entries] == [7, 1, None]
+
+
+def test_adoption_counts_leave_out_the_author_and_the_system_user():
+    """Creating an item bookmarks it for its author; that is not an adoption."""
+    from app.services.verification_service import adoption_counts
+
+    rows = [_lib_row("wf-1", "author"), _lib_row("wf-1", "bob"), _lib_row("wf-2", "system")]
+    refs = [_kb_ref("kb-uuid-1", "kb-owner")]
+    counts = adoption_counts(
+        rows, refs, {"kb-uuid-1": "kb-1"},
+        {("workflow", "wf-1"): "author", ("knowledge_base", "kb-1"): "kb-owner"},
+    )
+    assert counts[("workflow", "wf-1")] == 1
+    assert counts[("workflow", "wf-2")] == 0
+    assert counts[("knowledge_base", "kb-1")] == 0
+
+
+def _meta_row(validated_at=None, **quality):
+    import datetime as _dt
+    from types import SimpleNamespace
+    fields = dict(quality_score=None, quality_tier=None, quality_grade=None, validation_run_count=0,
+                  test_case_count=None, consistency=None)
+    fields.update(quality)
+    return SimpleNamespace(
+        item_kind="search_set", item_id="x", display_name="Grant fields", organization_ids=["org-1"],
+        last_validated_at=_dt.datetime(2026, 9, validated_at, tzinfo=_dt.timezone.utc) if validated_at else None,
+        **fields,
+    )
+
+
+def test_catalog_row_carries_the_uuid_keyed_validation_result():
+    """Extraction/KB runs record under the uuid; the catalog row is keyed by
+    ObjectId. The newer measurement must reach the catalog entry."""
+    from app.services.verification_service import with_measured_quality
+
+    catalog = _meta_row(quality_tier="excellent")  # asserted, never validated
+    measured = _meta_row(20, quality_score=0.71, quality_tier="good", test_case_count=12, consistency=0.91)
+    merged = with_measured_quality(catalog, measured)
+    assert (merged.quality_score, merged.quality_tier, merged.test_case_count, merged.consistency) == (0.71, "good", 12, 0.91)
+    assert merged.display_name == "Grant fields" and merged.organization_ids == ["org-1"]
+    assert catalog.quality_score is None  # the stored row is not mutated
+
+
+def test_catalog_row_keeps_its_own_newer_result():
+    from app.services.verification_service import with_measured_quality
+
+    catalog = _meta_row(22, quality_score=0.8, quality_tier="excellent")
+    older = _meta_row(20, quality_score=0.5, quality_tier="fair")
+    assert with_measured_quality(catalog, older) is catalog
+    assert with_measured_quality(catalog, None) is catalog
+    assert with_measured_quality(None, older) is older
