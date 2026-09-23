@@ -222,7 +222,7 @@ export function ExtractionEditorPanel() {
   // Block edits on verified extractions for non-examiners. Returns true if blocked.
   const blockedByVerified = (): boolean => {
     if (searchSet?.verified && !user?.is_examiner) {
-      toast('This extraction is verified — make a copy to edit', 'error')
+      toast('This extraction is shared with everyone — make a copy to edit', 'error')
       return true
     }
     return false
@@ -4087,7 +4087,7 @@ function ValidateTab({
                 onClose={() => setShowSubmitDialog(false)}
                 onSubmitted={() => {
                   setSubmitLibraryResult('success')
-                  toast('Submitted for verification', 'success')
+                  toast('Sent to the examiners — you\'ll hear back when someone has looked', 'success')
                 }}
               />
             )}
