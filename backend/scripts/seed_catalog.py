@@ -193,6 +193,16 @@ async def add_to_collection(collection: VerifiedCollection, item_id: str):
         await collection.save()
 
 
+# Catalog releases before 1.1 hand-typed gold/silver/bronze, a vocabulary the
+# measurement pipeline never emits (compute_quality_tier -> excellent/good/fair).
+# Map on the way in so old seed files and old rows land on the one vocabulary.
+_LEGACY_TIERS = {"gold": "excellent", "silver": "good", "bronze": "fair"}
+
+
+def normalize_tier(tier: str | None) -> str | None:
+    return _LEGACY_TIERS.get(tier, tier) if tier else tier
+
+
 async def upsert_verified_metadata(
     item_kind: str, item_id: str, display_name: str, description: str,
     quality_tier: str | None = None, quality_score: float | None = None,
@@ -214,6 +224,7 @@ async def upsert_verified_metadata(
     hand-asserted tier. It never overwrites a baseline an examiner pinned
     locally — local pins carry a user id, seed pins carry "catalog-seed".
     """
+    quality_tier = normalize_tier(quality_tier)
     existing = await VerifiedItemMetadata.find_one(
         VerifiedItemMetadata.item_kind == item_kind,
         VerifiedItemMetadata.item_id == item_id,
@@ -224,6 +235,8 @@ async def upsert_verified_metadata(
         existing.description = description
         if quality_tier is not None:
             existing.quality_tier = quality_tier
+        elif existing.quality_tier in _LEGACY_TIERS:
+            existing.quality_tier = _LEGACY_TIERS[existing.quality_tier]
         if quality_score is not None:
             existing.quality_score = quality_score
         if quality_grade is not None:

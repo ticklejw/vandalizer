@@ -75,3 +75,40 @@ async def test_seed_without_baseline_touches_nothing_baseline_shaped():
         await upsert_verified_metadata("search_set", "id-1", "Grant Fields", "desc")
     assert meta.official_baseline == {"test_cases": []}
     assert meta.official_baseline_pinned_by_user_id == "user-42"
+
+
+# ---------------------------------------------------------------------------
+# Legacy gold/silver/bronze seeds land on the measured vocabulary (#908)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_tier_maps_legacy_names_and_passes_others_through():
+    from scripts.seed_catalog import normalize_tier
+
+    assert normalize_tier("gold") == "excellent"
+    assert normalize_tier("silver") == "good"
+    assert normalize_tier("bronze") == "fair"
+    assert normalize_tier("excellent") == "excellent"
+    assert normalize_tier(None) is None
+
+
+@pytest.mark.asyncio
+async def test_seed_retier_rewrites_a_legacy_tier_on_an_existing_row_even_when_seed_omits_it():
+    """A row a 1.0 catalog stamped "gold" is fixed on the next seed run even
+    if the new seed file carries no tier of its own."""
+    meta = _existing_meta()
+    meta.quality_tier = "silver"
+    with patch("scripts.seed_catalog.VerifiedItemMetadata") as MockVM:
+        MockVM.find_one = _find_one_returning(meta)
+        await upsert_verified_metadata("workflow", "id-1", "Name", "desc")
+    assert meta.quality_tier == "good"
+
+
+@pytest.mark.asyncio
+async def test_seed_normalizes_a_legacy_tier_passed_by_an_old_seed_file():
+    meta = _existing_meta()
+    meta.quality_tier = None
+    with patch("scripts.seed_catalog.VerifiedItemMetadata") as MockVM:
+        MockVM.find_one = _find_one_returning(meta)
+        await upsert_verified_metadata("workflow", "id-1", "Name", "desc", quality_tier="gold")
+    assert meta.quality_tier == "excellent"

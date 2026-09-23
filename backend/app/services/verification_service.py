@@ -543,6 +543,19 @@ def catalog_row_is_openable(item, underlying) -> bool:
     return bool(getattr(underlying, "verified", True))
 
 
+# The one tier vocabulary: what compute_quality_tier emits. Ordered best-first.
+_TIER_ORDER = {"excellent": 0, "good": 1, "fair": 2}
+
+
+def _quality_sort_key(entry: dict) -> tuple:
+    """Sort key for ``sort=quality``: best tier first, and within a tier a
+    measured score outranks a hand-asserted tier (score None) — a catalog
+    author typing "excellent" must never rank above a run that earned it."""
+    tier = entry.get("quality_tier") or ""
+    score = entry.get("quality_score")
+    return (_TIER_ORDER.get(tier, 99), 1 if score is None else 0, -(score or 0))
+
+
 async def list_verified_items(
     kind_filter: str | None = None,
     search: str | None = None,
@@ -762,8 +775,7 @@ async def list_verified_items(
 
     # --- Sort ---
     if sort == "quality":
-        tier_order = {"gold": 0, "silver": 1, "bronze": 2}
-        results.sort(key=lambda e: (tier_order.get(e.get("quality_tier") or "", 99), -(e.get("quality_score") or 0)))
+        results.sort(key=_quality_sort_key)
     elif sort == "name":
         results.sort(key=lambda e: (e.get("display_name") or e.get("name") or "").lower())
     elif sort == "validations":
