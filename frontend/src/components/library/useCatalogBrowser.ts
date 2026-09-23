@@ -83,7 +83,9 @@ export function useCatalogBrowser({ lockedKind, loadErrorMessage, onLoadMoreErro
   useEffect(() => {
     browseCollections(lockedKind || undefined)
       .then(d => setCollections(d.collections))
-      .catch(() => setError('Failed to load collections'))
+      // The knowledge-base tab never surfaced this (its Retry does not refetch
+      // collections); keep that, and report it where the library tab always did.
+      .catch(() => { if (!lockedKind) setError('Failed to load collections') })
     listFeaturedCollections(lockedKind || undefined)
       .then(d => setFeaturedCollections(d.collections))
       .catch(() => {})

@@ -403,7 +403,7 @@ export function VerificationQueue({ focusRequestUuid }: { focusRequestUuid?: str
                               ) : (
                                 <div className="text-[10px] text-gray-500 inline-flex items-center gap-1">
                                   <Pin className="h-3 w-3" />
-                                  No validation run yet — the entry won\'t be monitored for drift until one is pinned. You can pin one later from the Catalog tab.
+                                  No validation run yet — the entry won't be monitored for drift until one is pinned. You can pin one later from the Catalog tab.
                                 </div>
                               )}
                               {/* Two real outcomes: accept it, or send it back with notes.

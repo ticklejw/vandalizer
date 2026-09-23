@@ -754,7 +754,7 @@ export const MODULES: ModuleDefinition[] = [
           options: [
             { text: 'The workflow is locked and cannot be edited by other team members', correct: false, explanation: 'Checked is not a lock. Anyone can copy a shared item and edit their copy.' },
             { text: 'An examiner looked it over, and its score, consistency and adoption are shown so you can judge fit yourself', correct: true, explanation: 'Correct. Checked means someone looked at it and it was measured, not endorsed for every use. The numbers on the entry are what you decide from.' },
-            { text: 'The workflow was created by an admin-level user', correct: false, explanation: 'Any team member can submit a workflow for verification. An examiner approves it based on the workflow\'s quality, not the creator\'s role.' },
+            { text: 'The workflow was created by an admin-level user', correct: false, explanation: 'Any team member can ask to share a workflow with everyone. An examiner looks it over and accepts it based on the workflow\'s quality, not the creator\'s role.' },
             { text: 'The workflow only uses LLM models approved by your institution', correct: false, explanation: 'Model approval is a separate concern. Checked is about the look-over and the measurements, not the model.' },
           ],
         },
@@ -766,7 +766,7 @@ export const MODULES: ModuleDefinition[] = [
       },
       {
         title: 'Establish your workflow governance',
-        content: '1. Pick a workflow that is ready to share beyond your personal work.\n2. Build or duplicate that workflow into the team context where others should reuse it.\n3. Make sure your workflow has a clear description.\n4. If you completed Module 8, ensure your validation plan passes.\n5. Submit the workflow for verification. That completes this module — an examiner reviews it on their own schedule, and your certification does not wait on them.\n6. Try exporting and importing the workflow.\n7. You now have a submitted, portable, well-documented workflow.',
+        content: '1. Pick a workflow that is ready to share beyond your personal work.\n2. Build or duplicate that workflow into the team context where others should reuse it.\n3. Make sure your workflow has a clear description.\n4. If you completed Module 8, ensure your validation plan passes.\n5. Share the workflow with everyone (\u22ef \u2192 Share with everyone). That completes this module — an examiner looks it over on their own schedule, and your certification does not wait on them.\n6. Try exporting and importing the workflow.\n7. You now have a submitted, portable, well-documented workflow.',
         variant: 'walkthrough',
       },
       {
@@ -785,7 +785,7 @@ export const MODULES: ModuleDefinition[] = [
       },
       {
         title: 'Worked example: one workflow, two offices',
-        content: 'The pre-award office builds \u201cSubaward Intake\u201d and it works well. The post-award office hears about it. What happens next decides whether this becomes shared infrastructure or a rumor.\n\n**Without governance** \u2014 someone emails a description, post-award rebuilds it from memory as \u201csubaward_test_v2_FINAL\u201d, the two copies drift, and six months later nobody knows which extracts the right indirect-cost field.\n\n**With the practices from this module** \u2014\n1. The workflow is named to say what it does: \u201cSubaward Intake \u2014 Terms & Deviations\u201d, with a description naming its expected input.\n2. It\u2019s shared to the team library \u2014 one copy, visible to both offices.\n3. An administrator reviews it against a real agreement and marks it **verified** \u2014 the badge that says \u201ctested, trusted, use this one.\u201d\n4. Post-award improves the deviation prompt \u2014 in the shared copy, so pre-award benefits the same day.\n\nThe rule of thumb it illustrates: share the workflow, not a description of it \u2014 and let verification, not word of mouth, mark which copy is the standard.',
+        content: 'The pre-award office builds \u201cSubaward Intake\u201d and it works well. The post-award office hears about it. What happens next decides whether this becomes shared infrastructure or a rumor.\n\n**Without governance** \u2014 someone emails a description, post-award rebuilds it from memory as \u201csubaward_test_v2_FINAL\u201d, the two copies drift, and six months later nobody knows which extracts the right indirect-cost field.\n\n**With the practices from this module** \u2014\n1. The workflow is named to say what it does: \u201cSubaward Intake \u2014 Terms & Deviations\u201d, with a description naming its expected input.\n2. It\u2019s shared to the team library \u2014 one copy, visible to both offices.\n3. It\u2019s shared with everyone, and an examiner looks it over against a real agreement and accepts it \u2014 the entry now carries its score, how consistent it is, and how many people use it.\n4. Post-award improves the deviation prompt \u2014 in the shared copy, so pre-award benefits the same day.\n\nThe rule of thumb it illustrates: share the workflow, not a description of it \u2014 and let the shared entry\u2019s score and adoption, not word of mouth, show which copy is the one to use.',
         variant: 'walkthrough',
       },
       {
