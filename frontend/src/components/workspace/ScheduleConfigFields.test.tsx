@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { ScheduleConfigFields } from './ScheduleConfigFields'
 import { previewSchedule } from '../../api/automations'
 import type { ScheduleTriggerConfig } from '../../types/automation'

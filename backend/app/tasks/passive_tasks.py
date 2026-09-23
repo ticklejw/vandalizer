@@ -261,34 +261,65 @@ def process_scheduled_automations(self) -> dict:
             if not cron_expr:
                 continue
 
-            base_time = automation_schedule.last_run_base(auto, now - timedelta(minutes=2))
+            timing = auto
+            if not auto.get("last_scheduled_run_at") and not auto.get("schedule_armed_at"):
+                # A schedule from before either stamp existed: count from its
+                # last run the way the old scheduler did (its latest trigger
+                # event), or every legacy schedule fires off-slot on upgrade.
+                last_event = db.workflow_trigger_event.find_one(
+                    {"trigger_context.automation_id": str(auto["_id"]), "trigger_type": "schedule"},
+                    sort=[("created_at", -1)],
+                )
+                if last_event and last_event.get("created_at"):
+                    timing = {**auto, "last_scheduled_run_at": last_event["created_at"]}
+            base_time = automation_schedule.last_run_base(timing, now - timedelta(minutes=2))
             next_run = automation_schedule.next_runs(trigger_config, base_time)[0]
             if next_run > now:
                 continue  # Not due yet
 
-            previous_run = auto.get("last_scheduled_run_at")
-            if previous_run is not None and previous_run.tzinfo is None:
-                previous_run = previous_run.replace(tzinfo=timezone.utc)
             # Claim the slot before dispatching: a crash mid-dispatch skips
-            # one run rather than repeating it every minute.
-            db.automation.update_one(
-                {"_id": auto["_id"]}, {"$set": {"last_scheduled_run_at": now}},
+            # one run rather than repeating it every minute. Conditional on
+            # the stamp this pass read, so two overlapping passes can't both
+            # dispatch the same slot.
+            claim = db.automation.update_one(
+                {"_id": auto["_id"], "last_scheduled_run_at": auto.get("last_scheduled_run_at")},
+                {"$set": {"last_scheduled_run_at": now}},
             )
+            if getattr(claim, "modified_count", 1) == 0:
+                continue
 
             # Gather documents from trigger_config
             doc_uuids = trigger_config.get("document_uuids", [])
             folder_id = trigger_config.get("folder_id")
             source_configured = bool(doc_uuids or folder_id)
 
-            doc_query: dict = {"processing": False, "soft_deleted": {"$ne": True}}
+            scope: dict = {"soft_deleted": {"$ne": True}}
             if doc_uuids:
-                doc_query["uuid"] = {"$in": doc_uuids}
+                scope["uuid"] = {"$in": doc_uuids}
             elif folder_id:
-                doc_query["folder"] = folder_id
-            # "Only new documents": after the first run, each run takes only
-            # what arrived since the previous one.
-            if trigger_config.get("only_new") and previous_run is not None:
-                doc_query["created_at"] = {"$gt": previous_run}
+                scope["folder"] = folder_id
+            doc_query: dict = {**scope, "processing": False}
+            only_new = bool(trigger_config.get("only_new"))
+            if only_new:
+                # "Only new documents": after the first run, each run takes
+                # what arrived since the previous one (by ObjectId — always
+                # UTC, unlike SmartDocument.created_at) plus anything that was
+                # still processing then and so could not run yet.
+                watermark = auto.get("schedule_docs_watermark")
+                if watermark is not None:
+                    new_since = {"$or": [
+                        {"_id": {"$gte": ObjectId.from_datetime(watermark)}},
+                        {"uuid": {"$in": auto.get("schedule_carryover_uuids") or []}},
+                    ]}
+                    doc_query.update(new_since)
+                    scope = {**scope, **new_since}
+                carryover = [
+                    d["uuid"] for d in db.smart_document.find({**scope, "processing": True}, {"uuid": 1})
+                ]
+                db.automation.update_one(
+                    {"_id": auto["_id"]},
+                    {"$set": {"schedule_docs_watermark": now, "schedule_carryover_uuids": carryover}},
+                )
 
             # A picker-made schedule (it has a frequency) with no folder or
             # documents chosen yet has nothing to run on. A bare cron schedule

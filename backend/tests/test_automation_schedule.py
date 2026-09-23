@@ -110,12 +110,17 @@ def _auto(**cfg_overrides):
     }
 
 
-def _run(auto, docs=None):
+def _run(auto, docs=None, processing=(), last_event=None, claim_modified=1):
     from app.tasks import passive_tasks
 
     db = MagicMock()
     db.automation.find.return_value = [auto]
-    db.smart_document.find.return_value = docs if docs is not None else [{"_id": ObjectId()}]
+    db.automation.update_one.return_value = MagicMock(modified_count=claim_modified)
+    db.workflow_trigger_event.find_one.return_value = last_event
+    ready = docs if docs is not None else [{"_id": ObjectId(), "uuid": "d-ready"}]
+    db.smart_document.find.side_effect = lambda q, *a, **k: (
+        [{"uuid": u} for u in processing] if q.get("processing") is True else ready
+    )
     with patch.object(passive_tasks, "get_sync_db", return_value=db), \
          patch.object(passive_tasks, "datetime") as dt:
         dt.now.return_value = NOW
@@ -130,7 +135,10 @@ class TestScheduler:
         assert result["processed"] == 1
         db.workflow_trigger_event.insert_one.assert_called_once()
         db.automation.update_one.assert_called_once()
-        assert db.automation.update_one.call_args.args[1] == {"$set": {"last_scheduled_run_at": NOW}}
+        claim_filter, claim_update = db.automation.update_one.call_args.args
+        assert claim_update == {"$set": {"last_scheduled_run_at": NOW}}
+        # Conditional on the stamp this pass read — no double dispatch.
+        assert claim_filter["last_scheduled_run_at"] == NOW - timedelta(days=1)
 
     def test_not_due_does_nothing(self):
         auto = _auto(folder_id="f1")
@@ -154,25 +162,46 @@ class TestScheduler:
         db, result = _run(auto)
         assert result["processed"] == 0
 
-    def test_only_new_filters_by_the_previous_run(self):
+    def test_only_new_takes_what_arrived_since_the_watermark_plus_carryover(self):
         auto = _auto(folder_id="f1", only_new=True)
-        db, _ = _run(auto)
-        query = db.smart_document.find.call_args.args[0]
-        assert query["folder"] == "f1"
-        assert query["created_at"] == {"$gt": auto["last_scheduled_run_at"]}
-        assert query["soft_deleted"] == {"$ne": True}
+        auto["schedule_docs_watermark"] = NOW - timedelta(days=1)
+        auto["schedule_carryover_uuids"] = ["d-was-processing"]
+        db, _ = _run(auto, processing=["d-still-processing"])
+        ready_query = next(c.args[0] for c in db.smart_document.find.call_args_list if c.args[0].get("processing") is False)
+        assert ready_query["folder"] == "f1" and ready_query["soft_deleted"] == {"$ne": True}
+        assert ready_query["$or"] == [
+            {"_id": {"$gte": ObjectId.from_datetime(auto["schedule_docs_watermark"])}},
+            {"uuid": {"$in": ["d-was-processing"]}},
+        ]
+        # The next run starts from now and carries what is still processing.
+        watermark_update = db.automation.update_one.call_args_list[1].args[1]
+        assert watermark_update == {"$set": {"schedule_docs_watermark": NOW, "schedule_carryover_uuids": ["d-still-processing"]}}
 
     def test_only_new_first_run_takes_everything(self):
         auto = _auto(folder_id="f1", only_new=True)
-        auto["last_scheduled_run_at"] = None
         db, _ = _run(auto)
-        assert "created_at" not in db.smart_document.find.call_args.args[0]
+        ready_query = next(c.args[0] for c in db.smart_document.find.call_args_list if c.args[0].get("processing") is False)
+        assert "$or" not in ready_query and "created_at" not in ready_query
+
+    def test_a_legacy_schedule_counts_from_its_last_trigger_event(self):
+        """No stamps yet: without the old lookup, every existing schedule would
+        fire off-slot the moment this deploys."""
+        auto = _auto(folder_id="f1")
+        auto["last_scheduled_run_at"] = None
+        auto["created_at"] = NOW - timedelta(days=90)
+        db, result = _run(auto, last_event={"created_at": NOW - timedelta(minutes=3)})  # ran today's 15:00
+        assert result["processed"] == 0
+
+    def test_a_lost_claim_does_not_dispatch(self):
+        db, result = _run(_auto(folder_id="f1"), claim_modified=0)
+        assert result["processed"] == 0
+        db.workflow_trigger_event.insert_one.assert_not_called()
 
     def test_nothing_to_run_on_skips_but_still_claims_the_slot(self):
         db, result = _run(_auto(folder_id="f1", only_new=True), docs=[])
         assert result["processed"] == 0
         db.workflow_trigger_event.insert_one.assert_not_called()
-        db.automation.update_one.assert_called_once()
+        assert db.automation.update_one.call_args_list[0].args[1] == {"$set": {"last_scheduled_run_at": NOW}}
 
     def test_a_picker_schedule_with_no_source_does_not_run(self):
         db, result = _run(_auto(source="documents"))
