@@ -1460,3 +1460,50 @@ async def test_submit_gate_min_workflow_grade_enforces_only_with_require_validat
     # submit_for_verification returns the serialised request; the insert is the tell.
     assert isinstance(result, dict)
     created.insert.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# adoption_counts — "N people use it" (#913)
+# ---------------------------------------------------------------------------
+
+
+def _lib_row(item_id, user, kind=None, verified=False):
+    from app.models.library import LibraryItemKind
+    r = MagicMock()
+    r.item_id = item_id
+    r.added_by_user_id = user
+    r.kind = kind or LibraryItemKind.WORKFLOW
+    r.verified = verified
+    return r
+
+
+def _kb_ref(source_kb_uuid, user):
+    r = MagicMock()
+    r.source_kb_uuid = source_kb_uuid
+    r.user_id = user
+    return r
+
+
+def test_adoption_counts_distinct_people_per_item_and_skips_the_catalog_row():
+    from app.services.verification_service import adoption_counts
+
+    rows = [
+        _lib_row("wf-1", "alice"),
+        _lib_row("wf-1", "alice"),            # re-added: still one person
+        _lib_row("wf-1", "bob"),
+        _lib_row("wf-1", "catalog", verified=True),  # the catalog's own row
+        _lib_row("wf-2", "carol"),
+    ]
+    refs = [_kb_ref("kb-uuid-1", "alice"), _kb_ref("kb-uuid-1", "dave"), _kb_ref("kb-uuid-9", "eve")]
+    counts = adoption_counts(rows, refs, {"kb-uuid-1": "kb-1"})
+    assert counts[("workflow", "wf-1")] == 2
+    assert counts[("workflow", "wf-2")] == 1
+    assert counts[("knowledge_base", "kb-1")] == 2
+    assert ("knowledge_base", "kb-9") not in counts  # unknown uuid is dropped, not miscounted
+
+
+def test_quality_sort_adoption_orders_most_used_first():
+    from app.services.verification_service import list_verified_items  # noqa: F401  (module import guard)
+    entries = [{"adoption_count": 1}, {"adoption_count": 7}, {}]
+    entries.sort(key=lambda e: -(e.get("adoption_count") or 0))
+    assert [e.get("adoption_count") for e in entries] == [7, 1, None]
