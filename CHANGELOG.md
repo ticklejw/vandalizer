@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **A knowledge base's web sources can refresh on a schedule, or all at once.** A URL source is a snapshot of the page taken when it was added. Per-source Refresh (#726) and the per-source retrieval dates (#747) made it possible to update and check one source at a time, but nothing kept a knowledge base current by itself. On one built from government or sponsor policy pages, a revised page kept answering from its old text until someone remembered to click Refresh on that source (support ticket). A strip above the source list now shows how many web sources the knowledge base has and when the oldest was last retrieved ("some not yet retrieved" when one never was). It offers **Refresh all**, and an **Auto-refresh** setting of Off, Daily, Weekly or Monthly. With a setting chosen, an hourly job queues a refresh for each web source whose last check is older than the interval. Refreshes are spaced a few seconds apart so a site's pages are not all fetched at once. Each refresh is exactly the per-source one: a failed fetch keeps the previous text, a page whose text has not changed is not re-embedded, and the outcome shows on the source as before. Auto-refresh is off unless someone turns it on, and only people who can manage the knowledge base can change it or refresh. API: `POST /api/knowledge/{uuid}/refresh-web-sources`, and `url_refresh_interval` on `POST /api/knowledge/{uuid}/update` (`"off"` clears it) and on the knowledge base in responses.
+
+### Fixed
+- **A web-source refresh that crashes no longer leaves the source stuck.** A failure outside the fetch and embed steps (a failed save, say) left the source "processing" for good, so neither the manual nor the scheduled refresh would touch it again. The source now returns to ready, keeping its existing chunks, with the error recorded. A source still queued or processing an hour after its refresh started is treated as abandoned and can be refreshed again. A second Refresh click on a source that is already queued is now refused with a 409; only one already processing was refused before (#726 follow-ups).
+
 ## [v4.13.0] - 2026-09-22
 
 ### Added

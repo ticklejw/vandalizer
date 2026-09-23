@@ -209,10 +209,48 @@ async def _refresh_url_source_async(kb_uuid: str, source_uuid: str):
         await svc.recalculate_stats(kb)
         return {"kb_uuid": kb_uuid, "refreshed": False}
 
-    reason = await svc.refresh_url_source(source, kb)
+    try:
+        reason = await svc.refresh_url_source(source, kb)
+    except Exception as e:
+        # refresh_url_source handles fetch and embed failures itself; anything
+        # else (a failed save, a bug) used to leave the source "processing"
+        # for good. Put it back: its chunks are whatever the index holds.
+        logger.exception("Refresh of KB source %s crashed", source_uuid)
+        reason = f"Refresh failed: {e}"[:2000]
+        source.status = "ready" if source.chunk_count else "error"
+        source.error_message = reason
+        source.last_refresh_error = reason
+        try:
+            await source.save()
+        except Exception:
+            logger.exception("Could not restore KB source %s after a failed refresh", source_uuid)
     # Unconditional: the router set status="building" before dispatching.
     await svc.recalculate_stats(kb)
     return {"kb_uuid": kb_uuid, "source_uuid": source_uuid, "refreshed": reason is None, "reason": reason}
+
+
+@celery.task(
+    bind=True,
+    name="tasks.kb.refresh_due_url_sources",
+    autoretry_for=TRANSIENT_EXCEPTIONS,
+    retry_backoff=True,
+    max_retries=2,
+)
+def refresh_due_url_sources_task(self):
+    """Beat: queue a refresh for every web source due under its KB's
+    ``url_refresh_interval``. See services/kb_url_refresh.py."""
+    return _run_async(_refresh_due_url_sources_async())
+
+
+async def _refresh_due_url_sources_async():
+    from app.config import Settings
+    from app.database import init_db
+
+    await init_db(Settings())
+
+    from app.services import kb_url_refresh
+
+    return await kb_url_refresh.refresh_due_sources()
 
 
 # ---------------------------------------------------------------------------
