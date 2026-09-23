@@ -456,3 +456,33 @@ def test_readiness_broken_ocr_does_not_block_readiness():
     )
     report = build_readiness(cfg, ocr_probe={"ok": False, "error": {"title": "down"}})
     assert report["ready"] is True
+
+
+
+def test_ocr_probe_bounds_the_async_poll():
+    """The docling async path polls for up to 15 minutes by default; the probe
+    passes its own cap so a stuck task can't hold a worker that long."""
+    import asyncio
+
+    from app.services import system_diagnostics as sd
+
+    with patch("app.services.ocr_client.convert", return_value="Vandalizer OCR probe. The quick brown fox.") as convert:
+        asyncio.run(sd.diagnose_ocr(_ocr_cfg(ocr_async=True, ocr_provider="docling")))
+    assert convert.call_args.kwargs["max_poll_seconds"] == sd._OCR_PROBE_MAX_TIMEOUT
+
+
+def test_ocr_probe_gives_up_on_a_service_that_never_finishes():
+    import asyncio
+    import time
+
+    from app.services import system_diagnostics as sd
+
+    def hang(*a, **kw):
+        time.sleep(1)
+        return "never"
+
+    with patch.object(sd, "_OCR_PROBE_TOTAL_TIMEOUT", 0.05), \
+         patch("app.services.ocr_client.convert", side_effect=hang):
+        result = asyncio.run(sd.diagnose_ocr(_ocr_cfg()))
+    assert result["ok"] is False
+    assert result["error"]["category"] == "timeout"

@@ -359,6 +359,8 @@ async def _probe_structured_output(
 # — and the readiness probe behind it — from holding a request open for the full
 # document timeout against a service that is hanging rather than answering.
 _OCR_PROBE_MAX_TIMEOUT = 60.0
+# The whole probe, end to end — httpx's timeout bounds each phase only.
+_OCR_PROBE_TOTAL_TIMEOUT = _OCR_PROBE_MAX_TIMEOUT + 5
 
 
 def _classify_ocr_error(exc: Exception) -> dict[str, str]:
@@ -547,11 +549,23 @@ async def diagnose_ocr(
                     provider=provider,
                     options=options,
                     use_async=use_async,
+                    # The async (docling) path polls for up to 15 minutes by
+                    # default; a probe must not hold a worker that long.
+                    max_poll_seconds=_OCR_PROBE_MAX_TIMEOUT,
+                    poll_interval=1.0,
                 )
+
+        async def _convert_bounded() -> str:
+            # httpx's timeout bounds each phase, not the whole request, so a
+            # service trickling bytes could outlast it. Bound the total.
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(_convert), _OCR_PROBE_TOTAL_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"OCR probe timed out after {int(_OCR_PROBE_TOTAL_TIMEOUT)}s") from None
 
         started = time.perf_counter()
         try:
-            text = await asyncio.to_thread(_convert)
+            text = await _convert_bounded()
         except Exception as exc:  # noqa: BLE001 — classified and reported, not raised
             latency_ms = int((time.perf_counter() - started) * 1000)
             error = _classify_ocr_error(exc)

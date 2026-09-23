@@ -895,7 +895,8 @@ class TestReadinessOcrProbe:
         assert resp.status_code == 200
         body = resp.json()
         assert body["item"]["status"] == "broken"
-        assert body["probe"]["ok"] is False
+        # The probe (endpoint URL, raw service reply) is not handed to staff.
+        assert "probe" not in body
 
     @pytest.mark.asyncio
     async def test_a_working_service_reports_the_row_as_configured(self, client):
