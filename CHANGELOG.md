@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Schedule is now a trigger in the automation wizard, alongside Folder Watch and API Endpoint.** The backend had a minute-by-minute scheduler that only accepted a raw cron expression, and nothing in the app could create or edit a schedule. A schedule automation now runs any of the three actions (workflow, extraction or task) on a plain pick: **daily**, **weekly** on a chosen weekday, or **monthly** on a day from 1 to 28 (so every month has it), at a time, in a chosen **time zone** that defaults to the browser's. The time is evaluated on that zone's wall clock, so 9:00 stays 9:00 across a daylight-saving change. It runs on **a folder** or **specific documents**. For a folder, **"Only documents added since the last run"** makes the first run take the whole folder and each later run take only what arrived since the previous one; a run with nothing new is skipped. The wizard and the editor show the **next run**, plus the two after it, computed by the same code the scheduler uses, with the viewer's own local time beside it when the zones differ. The automations list gets a Schedule filter and shows each schedule's next run, or "Paused". The folder or documents a schedule names must be ones its creator can open. `POST /api/automations/schedule/preview` returns the next three run times for a pick without saving it. An automation created through the API with a bare `cron_expression` keeps working as before, now evaluated in its `timezone` (UTC when none is given).
+- **The automation wizard and editor fold into sections.** The wizard's Folder Watch step (Folder, Filters), its Schedule step (When, Runs on) and its last step (Activation, Output), and the editor's Trigger, Action and Post-Action Output sections, including the API Endpoint's setup, each expand and collapse. A folded section still shows a one-line summary of its setting.
+
+### Fixed
+- **A scheduled extraction no longer re-runs every minute once it is due.** The scheduler worked out a schedule's last run from its workflow trigger events, and an extraction run records none, so an extraction schedule never looked like it had run. Each firing is now recorded on the automation itself, whatever the action. The scheduler records the slot before dispatching, so a crash mid-dispatch skips one run rather than repeating it. A schedule that is switched back on, or whose timing is changed, counts from that moment instead of firing a slot it missed while paused. The scheduler also now skips soft-deleted documents in a scheduled folder, as Run now already did.
+
 ## [v4.13.0] - 2026-09-22
 
 ### Added

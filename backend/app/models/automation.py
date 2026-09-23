@@ -21,6 +21,10 @@ class Automation(Document):
     team_id: Optional[str] = None
     shared_with_team: bool = False
     output_config: dict = {}
+    # Schedule triggers: when the schedule last fired, and when it was last
+    # enabled or changed — see automation_schedule.last_run_base.
+    last_scheduled_run_at: Optional[datetime.datetime] = None
+    schedule_armed_at: Optional[datetime.datetime] = None
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(tz=datetime.timezone.utc))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(tz=datetime.timezone.utc))
 
