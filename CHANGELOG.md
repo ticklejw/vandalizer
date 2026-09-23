@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Deleting a file now says what happens to the knowledge bases built from it, and can remove it from them.** The delete confirmation said "Deleting it removes it from each of these", but a knowledge-base source answers from its own ingested copy: after Delete the KB still listed the source as "source deleted", its chunk count was unchanged, and chat kept answering from the file — the KB inspector said so in as many words (support ticket). The confirmation now says it plainly (knowledge bases keep their copy, extraction test cases keep a saved snapshot, a workflow that pins the file fails until it is replaced) and, when the file is in any knowledge base, offers **Also remove from these knowledge bases**, checked by default. Checked, the file's sources and their chunks are removed from every knowledge base the user can manage; a knowledge base they cannot manage keeps its copy and is named in a notice after the delete, so the dialog's promise is never silently broken. The same applies to bulk delete. `DELETE /api/files/{uuid}` accepts `remove_from_knowledge_bases=true` and then returns `knowledge_bases_removed` and `knowledge_bases_kept`; without it the behavior is unchanged. The "used in" list now leads each row with its kind and quotes the name, so a knowledge base auto-named "NSF_PAPPG.pdf (and 1 more)" by Convert to Knowledge Base no longer reads as two files beside "used in 1 knowledge base". The "Where is this used?" dialog's summary line is corrected the same way.
+
 ## [v4.13.0] - 2026-09-22
 
 ### Added
