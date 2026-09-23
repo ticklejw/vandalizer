@@ -154,3 +154,31 @@ class TestOptimizeRoute:
             )
 
         assert resp.status_code == 404
+
+
+class TestCancelOptimizationRoute:
+    """A reviewer can stop the run they started, not the owner's."""
+
+    async def _cancel(self, client, run_owner):
+        user = _make_user()
+        cookies, headers = _auth()
+        run = MagicMock(user_id=run_owner, status="running", cancel_requested=False, save=AsyncMock())
+        with patch("app.dependencies.decode_token", return_value={"sub": "examiner", "type": "access"}), \
+             patch("app.dependencies.User") as MockUser, \
+             patch("app.routers.workflows.get_authorized_workflow", _validate_only_authz(MagicMock())), \
+             patch("app.models.workflow_optimization_run.WorkflowOptimizationRun", **{"find_one": AsyncMock(return_value=run)}):
+            MockUser.find_one = AsyncMock(return_value=user)
+            resp = await client.post("/api/workflows/wf-id/optimize/run-1/cancel", cookies=cookies, headers=headers)
+        return resp, run
+
+    @pytest.mark.asyncio
+    async def test_reviewer_cannot_cancel_the_owners_run(self, client):
+        resp, run = await self._cancel(client, run_owner="owner")
+        assert resp.status_code == 403
+        assert run.cancel_requested is False
+
+    @pytest.mark.asyncio
+    async def test_reviewer_can_cancel_their_own_run(self, client):
+        resp, run = await self._cancel(client, run_owner="examiner")
+        assert resp.status_code == 200
+        assert run.cancel_requested is True
