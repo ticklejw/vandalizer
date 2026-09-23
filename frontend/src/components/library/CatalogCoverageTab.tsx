@@ -74,7 +74,7 @@ export function CatalogCoverageTab() {
           <span className="text-xs text-gray-500">({total} shared items)</span>
         </div>
         <p className="text-xs text-gray-500">
-          Verified catalog items by validation coverage. Items without a pinned baseline have no drift contract — clicking <strong>Establish baseline</strong> creates one retroactively.
+          Shared items by validation coverage. An item without a pinned baseline is not monitored for drift — <strong>Establish baseline</strong> pins one from its latest validation.
         </p>
       </div>
 

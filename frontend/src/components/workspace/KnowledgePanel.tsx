@@ -602,12 +602,12 @@ export function KnowledgePanel() {
       setVerifyDescription('')
       setVerifyCategory('')
       setVerificationSubmitted(true)
-      toast('Submitted for verification', 'success')
+      toast('Sent — an examiner will look it over', 'success')
       if (selectedKB?.uuid === kbUuid) loadDetail(kbUuid)
       refresh()
     } catch (err) {
-      console.error('Failed to submit for verification:', err)
-      toast(err instanceof Error ? err.message : 'Failed to submit for verification', 'error')
+      console.error('Failed to share with everyone:', err)
+      toast(err instanceof Error ? err.message : 'Failed to share with everyone', 'error')
     } finally {
       setSubmittingVerify(false)
     }

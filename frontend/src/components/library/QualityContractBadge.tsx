@@ -32,7 +32,8 @@ export function QualityContractBadge({ status, tier, lastValidatedAt, isStale, m
   let label = `Checked`
   if (tier) label += ` \u00b7 ${tierLabel}`
   if (asserted) {
-    label += ` (asserted)`
+    // Same plain words as QualityBadge: an author's rating, not a check.
+    label = tier ? `Rated ${tierLabel} by its author \u00b7 not yet checked here` : 'Not yet checked here'
   } else if (isStale) {
     label += ` \u00b7 Stale`
     if (staleLabel) label += ` \u00b7 ${staleLabel}`

@@ -1,5 +1,6 @@
 """Verification queue service  - submit, review, approve, reject."""
 
+import copy
 import datetime
 import logging
 
@@ -531,11 +532,21 @@ def catalog_row_is_openable(item, underlying) -> bool:
 # The one tier vocabulary: what compute_quality_tier emits. Ordered best-first.
 _TIER_ORDER = {"excellent": 0, "good": 1, "fair": 2}
 
+# Tier names from before the vocabulary was unified. Rows written then still
+# carry them until a re-seed touches them — and rows the seeds no longer cover
+# never get re-seeded — so every read maps them rather than trusting storage.
+LEGACY_TIERS = {"gold": "excellent", "silver": "good", "bronze": "fair"}
+
+
+def normalize_tier(tier: str | None) -> str | None:
+    return LEGACY_TIERS.get(tier, tier) if tier else tier
+
 
 def adoption_counts(
     library_rows: list,
     kb_refs: list,
     kb_uuid_to_id: dict[str, str],
+    creator_map: dict[tuple[str, str], str] | None = None,
 ) -> dict[tuple[str, str], int]:
     """Distinct people who adopted each catalog item, keyed (kind, item_id).
 
@@ -543,7 +554,8 @@ def adoption_counts(
     which writes a non-verified LibraryItem pointing at the same object; a
     knowledge base by a KnowledgeBaseReference. Counting distinct users
     rather than rows means re-adding, or moving a bookmark between personal
-    and team, does not inflate it.
+    and team, does not inflate it. The item's own author is not an adopter —
+    creating an item bookmarks it for them — nor is the system user.
     """
     adopters: dict[tuple[str, str], set[str]] = {}
     for row in library_rows:
@@ -555,7 +567,45 @@ def adoption_counts(
         kb_id = kb_uuid_to_id.get(ref.source_kb_uuid)
         if kb_id:
             adopters.setdefault((LibraryItemKind.KNOWLEDGE_BASE.value, kb_id), set()).add(ref.user_id)
+    creators = creator_map or {}
+    for key, users in adopters.items():
+        users.discard(creators.get(key))
+        users.discard("system")
     return {key: len(users) for key, users in adopters.items()}
+
+
+# What a validation run writes onto VerifiedItemMetadata (quality_service.update_quality_metadata).
+_MEASURED_FIELDS = (
+    "quality_score", "quality_tier", "quality_grade", "last_validated_at",
+    "validation_run_count", "test_case_count", "consistency",
+)
+
+
+def _aware_dt(value):
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=datetime.timezone.utc)
+
+
+def with_measured_quality(meta, measured):
+    """The catalog row, carrying the newer validation result when there is one.
+
+    Extraction and KB validation runs are recorded under the item's uuid, so
+    their results land on a uuid-keyed metadata row, while the catalog's row
+    (display name, description, org visibility) is keyed by the ObjectId.
+    Reading only the ObjectId row dropped every extraction and KB result —
+    score, tier, case count and consistency never reached Explore.
+    """
+    if measured is None or measured is meta or measured.last_validated_at is None:
+        return meta
+    if meta is None:
+        return measured
+    if meta.last_validated_at and _aware_dt(meta.last_validated_at) >= _aware_dt(measured.last_validated_at):
+        return meta
+    merged = copy.copy(meta)
+    for field in _MEASURED_FIELDS:
+        setattr(merged, field, getattr(measured, field, None))
+    return merged
 
 
 def _quality_sort_key(entry: dict) -> tuple:
@@ -621,13 +671,15 @@ async def list_verified_items(
     name_map: dict[str, str] = {}
     creator_map: dict[tuple[str, str], str] = {}
     # Bundled starter examples carry the seed marker the catalog seeder writes;
-    # the listing says so per item, since nobody *here* shared those.
+    # the listing says so per item, since nobody *here* shared those. Copies
+    # ("Add to my library") carry the marker too, so the system owner is what
+    # makes one a starter — a colleague's edited copy is their own share.
     starter_ids: set[str] = set()
     if wf_ids:
         wfs = await Workflow.find({"_id": {"$in": wf_ids}}).to_list()
         for wf in wfs:
             name_map[str(wf.id)] = wf.name
-            if (wf.resource_config or {}).get("seed_id"):
+            if (wf.resource_config or {}).get("seed_id") and wf.user_id == "system":
                 starter_ids.add(str(wf.id))
             creator_id = wf.created_by_user_id or wf.user_id
             if creator_id:
@@ -638,7 +690,7 @@ async def list_verified_items(
         for ss in ssets:
             name_map[str(ss.id)] = ss.title
             ss_map[str(ss.id)] = ss
-            if (ss.extraction_config or {}).get("seed_id"):
+            if (ss.extraction_config or {}).get("seed_id") and ss.user_id == "system":
                 starter_ids.add(str(ss.id))
             if ss.user_id:
                 creator_map[(LibraryItemKind.SEARCH_SET.value, str(ss.id))] = ss.user_id
@@ -646,7 +698,7 @@ async def list_verified_items(
         kbs = await KnowledgeBase.find({"_id": {"$in": kb_ids}}).to_list()
         for kb in kbs:
             name_map[str(kb.id)] = kb.title
-            if (kb.resource_config or {}).get("seed_id"):
+            if (kb.resource_config or {}).get("seed_id") and kb.user_id == "system":
                 starter_ids.add(str(kb.id))
             if kb.user_id:
                 creator_map[(LibraryItemKind.KNOWLEDGE_BASE.value, str(kb.id))] = kb.user_id
@@ -691,7 +743,7 @@ async def list_verified_items(
     # workflows/extractions are non-verified LibraryItems on the same object;
     # KB adoptions are references keyed by the KB's uuid.
     adoption_rows = (
-        await LibraryItem.find({"item_id": {"$in": all_object_ids}, "verified": False}).to_list()
+        await LibraryItem.find({"item_id": {"$in": all_object_ids}, "verified": {"$ne": True}}).to_list()
         if all_object_ids else []
     )
     kb_uuid_to_id = {kb.uuid: kb_id for kb_id, kb in kb_map.items()}
@@ -699,7 +751,7 @@ async def list_verified_items(
         await KnowledgeBaseReference.find({"source_kb_uuid": {"$in": list(kb_uuid_to_id)}}).to_list()
         if kb_uuid_to_id else []
     )
-    adoption_map = adoption_counts(adoption_rows, kb_refs, kb_uuid_to_id)
+    adoption_map = adoption_counts(adoption_rows, kb_refs, kb_uuid_to_id, creator_map)
 
     # --- Build result entries (applying search and org filters) ---
     search_lower = search.lower() if search else None
@@ -708,6 +760,13 @@ async def list_verified_items(
         item_id_str = str(item.item_id)
         name = name_map.get(item_id_str, "Unknown")
         meta = meta_map.get((item.kind.value, item_id_str))
+        underlying_obj = (
+            ss_map.get(item_id_str) if item.kind == LibraryItemKind.SEARCH_SET
+            else kb_map.get(item_id_str) if item.kind == LibraryItemKind.KNOWLEDGE_BASE
+            else None
+        )
+        if underlying_obj is not None and getattr(underlying_obj, "uuid", None):
+            meta = with_measured_quality(meta, meta_map.get((item.kind.value, underlying_obj.uuid)))
 
         # Search: match against name, display_name, description, and tags
         if search_lower:
@@ -727,7 +786,7 @@ async def list_verified_items(
                 continue
 
         # Quality tier filter
-        item_tier = meta.quality_tier if meta else None
+        item_tier = normalize_tier(meta.quality_tier) if meta else None
         if quality_tier and item_tier != quality_tier:
             continue
 
@@ -890,7 +949,7 @@ async def get_item_metadata(item_kind: str, item_id: str) -> dict | None:
         "updated_at": meta.updated_at.isoformat() if meta.updated_at else None,
         "updated_by_user_id": meta.updated_by_user_id,
         "quality_score": meta.quality_score,
-        "quality_tier": meta.quality_tier,
+        "quality_tier": normalize_tier(meta.quality_tier),
         "quality_grade": meta.quality_grade,
         "last_validated_at": meta.last_validated_at.isoformat() if meta.last_validated_at else None,
         "validation_run_count": meta.validation_run_count,
@@ -1190,7 +1249,7 @@ async def list_catalog_coverage(
             "coverage": coverage,
             "coverage_order": coverage_order.get(coverage, 99),
             "quality_score": meta.quality_score if meta else None,
-            "quality_tier": meta.quality_tier if meta else None,
+            "quality_tier": normalize_tier(meta.quality_tier) if meta else None,
             "quality_asserted": bool(meta and meta.quality_tier and meta.quality_score is None),
             "last_validated_at": meta.last_validated_at.isoformat() if meta and meta.last_validated_at else None,
             "official_baseline_pinned_at": meta.official_baseline_pinned_at.isoformat() if meta and meta.official_baseline_pinned_at else None,
