@@ -178,15 +178,31 @@ async def _add_urls_async(
     retry_backoff=True,
     max_retries=2,
     default_retry_delay=10,
-    soft_time_limit=900,  # 15 min — one page (or one large PDF) fetch + embed
-    time_limit=960,
+    # One page fetch + embed. A long page is indexed in full (millions of
+    # characters, thousands of chunks), so this matches that, not a prompt.
+    soft_time_limit=3600,
+    time_limit=3660,
 )
-def refresh_url_source_task(self, kb_uuid: str, source_uuid: str):
+def refresh_url_source_task(self, kb_uuid: str, source_uuid: str, queued_at: str | None = None):
     """Re-fetch one URL source in place. See knowledge_service.refresh_url_source."""
-    return _run_async(_refresh_url_source_async(kb_uuid, source_uuid))
+    return _run_async(_refresh_url_source_async(kb_uuid, source_uuid, queued_at))
 
 
-async def _refresh_url_source_async(kb_uuid: str, source_uuid: str):
+def _same_stamp(stored, queued_at: str | None) -> bool:
+    """Whether this task is the latest queueing of the source's refresh."""
+    if queued_at is None or stored is None:
+        return True  # a task queued before stamps were passed along
+    import datetime as _dt
+
+    if stored.tzinfo is None:
+        stored = stored.replace(tzinfo=_dt.timezone.utc)
+    try:
+        return abs((stored - _dt.datetime.fromisoformat(queued_at)).total_seconds()) < 1
+    except ValueError:
+        return True
+
+
+async def _refresh_url_source_async(kb_uuid: str, source_uuid: str, queued_at: str | None = None):
     from app.config import Settings
     from app.database import init_db
 
@@ -209,8 +225,17 @@ async def _refresh_url_source_async(kb_uuid: str, source_uuid: str):
         await svc.recalculate_stats(kb)
         return {"kb_uuid": kb_uuid, "refreshed": False}
 
+    if not _same_stamp(getattr(source, "refresh_queued_at", None), queued_at):
+        # Queued again since (the previous task sat past the abandoned-refresh
+        # window); that later task owns the refresh. Two would race each other
+        # deleting and re-adding the same chunks.
+        logger.info("Refresh of KB source %s superseded by a later queueing; skipping.", source_uuid)
+        return {"kb_uuid": kb_uuid, "source_uuid": source_uuid, "refreshed": False, "reason": "superseded"}
+
     try:
         reason = await svc.refresh_url_source(source, kb)
+    except TRANSIENT_EXCEPTIONS:
+        raise  # Celery retries these; the stale-refresh window covers the rest.
     except Exception as e:
         # refresh_url_source handles fetch and embed failures itself; anything
         # else (a failed save, a bug) used to leave the source "processing"

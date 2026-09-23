@@ -28,11 +28,12 @@ INTERVALS: dict[str, datetime.timedelta] = {
     "monthly": datetime.timedelta(days=30),
 }
 
-# A refresh is one page fetch + embed (the task's hard limit is 16 minutes).
-# A source still "pending" or "processing" long after that lost its worker;
-# it is refreshable again rather than stuck, which would otherwise exempt it
-# from every later scheduled refresh.
-STALE_IN_FLIGHT = datetime.timedelta(hours=1)
+# A refresh is one page fetch + embed (the task's hard limit is about an hour,
+# for a long page indexed in full). A source still "pending" or "processing"
+# well past that — counted from when its task was due to start — lost its
+# worker; it is refreshable again rather than stuck, which would otherwise
+# exempt it from every later scheduled refresh.
+STALE_IN_FLIGHT = datetime.timedelta(hours=2)
 
 # Seconds between queued fetches for one KB — a crawl's children usually sit
 # on the same site, which should not get them all in the same second.
@@ -89,11 +90,16 @@ async def queue_refresh(kb: KnowledgeBase, sources: list[KnowledgeBaseSource]) -
 
     now = datetime.datetime.now(tz=datetime.timezone.utc)
     for i, source in enumerate(sources):
+        countdown = i * STAGGER_SECONDS
+        # Stamped with when the task is due to start, so a long stagger is not
+        # mistaken for an abandoned refresh; the task carries the stamp and
+        # does nothing if a later queueing has replaced it.
+        due = now + datetime.timedelta(seconds=countdown)
         source.status = "pending"
-        source.refresh_queued_at = now
+        source.refresh_queued_at = due
         await source.save()
         refresh_url_source_task.apply_async(
-            args=(kb.uuid, source.uuid), countdown=i * STAGGER_SECONDS,
+            args=(kb.uuid, source.uuid, due.isoformat()), countdown=countdown,
         )
     return len(sources)
 

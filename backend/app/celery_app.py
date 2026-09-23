@@ -133,10 +133,6 @@ celery.conf.beat_schedule = {
         "task": "tasks.passive.optimization_janitor",
         "schedule": crontab(minute=0),  # hourly
     },
-    # Monthly re-judge of KBs with an applied optimization config — catches
-    # quiet regressions after Apply (KB content drifts, retrieval pipeline
-    # shifts). Emits a QualityAlert when the current blended score has fallen
-    # >10pts vs the originally applied run's optimized_score.
     # Knowledge bases with automatic web-source refresh: queue the sources
     # whose last check is older than their KB's interval. Hourly, so a
     # "daily" refresh lands within an hour of being due.
@@ -144,6 +140,10 @@ celery.conf.beat_schedule = {
         "task": "tasks.kb.refresh_due_url_sources",
         "schedule": crontab(minute=17),  # hourly, off the top of the hour
     },
+    # Monthly re-judge of KBs with an applied optimization config — catches
+    # quiet regressions after Apply (KB content drifts, retrieval pipeline
+    # shifts). Emits a QualityAlert when the current blended score has fallen
+    # >10pts vs the originally applied run's optimized_score.
     "kb-revalidate-applied-monthly": {
         "task": "tasks.passive.kb_revalidate_applied",
         "schedule": crontab(day_of_month=1, hour=2, minute=0),  # 1st of month, 2am

@@ -894,9 +894,10 @@ async def refresh_source(
     source.status = "pending"
     source.refresh_queued_at = datetime.datetime.now(tz=datetime.timezone.utc)
     await source.save()
+    queued_stamp = source.refresh_queued_at.isoformat()
     kb.status = "building"
     await kb.save()
-    refresh_url_source_task.delay(kb.uuid, source.uuid)
+    refresh_url_source_task.delay(kb.uuid, source.uuid, queued_stamp)
     return {"ok": True, "status": "queued", "source_uuid": source.uuid}
 
 

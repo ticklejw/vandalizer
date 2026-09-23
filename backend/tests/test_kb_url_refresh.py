@@ -74,7 +74,9 @@ class TestScheduledPass:
         assert kb_find.call_args.args[0] == {"url_refresh_interval": {"$in": ["daily", "weekly", "monthly"]}}
         assert result == {"knowledge_bases": 1, "queued": 1}
         dispatch.assert_called_once()
-        assert dispatch.call_args.kwargs["args"] == ("kb-1", "due")
+        assert dispatch.call_args.kwargs["args"][:2] == ("kb-1", "due")
+        # The task carries the stamp it was queued under.
+        assert dispatch.call_args.kwargs["args"][2] == due.refresh_queued_at.isoformat()
         assert due.status == "pending" and due.refresh_queued_at is not None
         # A scheduled pass leaves the KB's status to the refresh tasks.
         kb.save.assert_not_awaited()
@@ -103,6 +105,38 @@ class TestRefreshAll:
         assert result == {"queued": 2, "in_progress": 1}
         assert [c.kwargs["countdown"] for c in dispatch.call_args_list] == [0, r.STAGGER_SECONDS]
         assert kb.status == "building"
+        # Stamped with when each task is due to start, not when it was queued.
+        assert (b.refresh_queued_at - a.refresh_queued_at).total_seconds() == r.STAGGER_SECONDS
+
+
+class TestTaskDedupe:
+    @pytest.mark.asyncio
+    async def test_a_superseded_task_does_nothing(self):
+        from app.tasks import kb_validation_tasks as t
+
+        src = _src(status="pending", queued_minutes_ago=0)
+        older = (src.refresh_queued_at - datetime.timedelta(hours=3)).isoformat()
+        with patch("app.database.init_db", AsyncMock()), \
+             patch("app.models.knowledge.KnowledgeBase", **{"find_one": AsyncMock(return_value=SimpleNamespace(uuid="kb-1"))}), \
+             patch("app.models.knowledge.KnowledgeBaseSource", **{"find_one": AsyncMock(return_value=src)}), \
+             patch("app.services.knowledge_service.refresh_url_source", AsyncMock()) as refresh:
+            out = await t._refresh_url_source_async("kb-1", "s1", older)
+        assert out["reason"] == "superseded"
+        refresh.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_transient_error_is_left_to_celery_retry(self):
+        from app.tasks import kb_validation_tasks as t
+        from app.tasks import TRANSIENT_EXCEPTIONS
+
+        transient = TRANSIENT_EXCEPTIONS[0]
+        src = _src(status="processing")
+        with patch("app.database.init_db", AsyncMock()), \
+             patch("app.models.knowledge.KnowledgeBase", **{"find_one": AsyncMock(return_value=SimpleNamespace(uuid="kb-1"))}), \
+             patch("app.models.knowledge.KnowledgeBaseSource", **{"find_one": AsyncMock(return_value=src)}), \
+             patch("app.services.knowledge_service.refresh_url_source", AsyncMock(side_effect=transient("blip"))):
+            with pytest.raises(transient):
+                await t._refresh_url_source_async("kb-1", "s1")
 
 
 class TestTaskRecovers:
