@@ -1048,6 +1048,52 @@ async def remove_source(kb: KnowledgeBase, source_uuid: str) -> bool:
     return True
 
 
+async def remove_document_from_knowledge_bases(
+    doc_uuid: str, user: User,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Remove every knowledge-base source built from ``doc_uuid``, chunks and all.
+
+    Deleting a document leaves its KB sources in place — each one answers from
+    its own ingested copy — so "delete this file everywhere" has to be asked for
+    and done here. Only knowledge bases the user may manage are touched; the
+    rest are returned as ``kept`` so the caller can say which copies remain.
+    One failing KB never stops the others.
+
+    Returns ``(removed, kept)``, each a list of ``{uuid, title}``.
+    """
+    from app.services import organization_service
+
+    sources = await KnowledgeBaseSource.find({"document_uuid": doc_uuid}).to_list()
+    if not sources:
+        return [], []
+    user_org_ancestry = await organization_service.get_user_org_ancestry(user)
+    removed: list[dict[str, str]] = []
+    kept: list[dict[str, str]] = []
+    kb_uuids = list(dict.fromkeys(s.knowledge_base_uuid for s in sources if s.knowledge_base_uuid))
+    for kb_uuid in kb_uuids:
+        kb = await get_knowledge_base(
+            kb_uuid, user, manage=True, user_org_ancestry=user_org_ancestry, allow_admin=True,
+        )
+        if kb is None:
+            viewable = await get_knowledge_base(
+                kb_uuid, user, user_org_ancestry=user_org_ancestry, allow_admin=True,
+            )
+            # A KB the user cannot even see is someone else's: don't name it.
+            if viewable is not None:
+                kept.append({"uuid": kb_uuid, "title": viewable.title})
+            continue
+        try:
+            for source in sources:
+                if source.knowledge_base_uuid == kb_uuid:
+                    await remove_source(kb, source.uuid)
+        except Exception:
+            logger.exception("Failed to remove document %s from KB %s", doc_uuid, kb_uuid)
+            kept.append({"uuid": kb.uuid, "title": kb.title})
+            continue
+        removed.append({"uuid": kb.uuid, "title": kb.title})
+    return removed, kept
+
+
 # --- Clone ---
 
 
@@ -1722,6 +1768,30 @@ def _reject_fetched_page(result: WebFetchResult) -> str | None:
 _REFRESH_COLLAPSE_RATIO = 0.25
 
 
+def _kb_text_cap() -> int:
+    """Characters of extracted text a KB source may carry.
+
+    Read at call time, not import time, so a deployment can raise or lower it
+    without a code change — and so tests can set it per case.
+    """
+    from app.config import Settings
+
+    return Settings().kb_url_max_chars
+
+
+def _kb_snapshot(text: str) -> str:
+    """The stored copy of a source's text.
+
+    Bounded by the same limit that bounded the ingest, so the snapshot is the
+    text that was indexed rather than a shorter copy of it. That identity is
+    load-bearing in two places: ``_reject_collapsed_refresh`` measures a
+    refetch against this snapshot and would read a capped one as the page
+    having shrunk, and the source inspector presents it as "the extracted
+    text" the answers were built from.
+    """
+    return text[:_kb_text_cap()]
+
+
 def _reject_collapsed_refresh(
     previous_text: str | None, new_text: str, last_collapsed_hash: str | None = None,
 ) -> str | None:
@@ -1792,7 +1862,7 @@ async def refresh_url_source(
     try:
         from app.services.web_fetcher import fetch_url
 
-        result = await fetch_url(source.url)
+        result = await fetch_url(source.url, max_chars=_kb_text_cap())
         reason = _reject_fetched_page(result)
         if reason is None:
             reason = _reject_collapsed_refresh(
@@ -1858,7 +1928,7 @@ async def refresh_url_source(
         await source.save()
         return source.error_message
 
-    source.content = raw_text[:500000]
+    source.content = _kb_snapshot(raw_text)
     source.url_title = result.title or source.url_title
     source.truncated = bool(result.truncated)
     source.warnings = list(result.advisories)
@@ -1889,7 +1959,7 @@ async def _ingest_url_source(
     try:
         from app.services.web_fetcher import fetch_url
 
-        result = await fetch_url(source.url)
+        result = await fetch_url(source.url, max_chars=_kb_text_cap())
         raw_text = result.text
 
         reject_reason = _reject_fetched_page(result)
@@ -1909,7 +1979,7 @@ async def _ingest_url_source(
                 # Not an error — the caller still wants the links off this page.
                 return result
 
-        source.content = raw_text[:500000]
+        source.content = _kb_snapshot(raw_text)
         source.url_title = result.title
         source.truncated = bool(result.truncated)
         # e.g. a fetched PDF whose hidden-text scrub could not run: the text
@@ -1981,7 +2051,7 @@ async def ingest_text_into_source(
         chunk_count = await asyncio.to_thread(
             dm.add_to_kb, kb.uuid, source.uuid, name, text,
         )
-        source.content = text[:500000]
+        source.content = _kb_snapshot(text)
         if label:
             source.url_title = label[:500]
         source.chunk_count = chunk_count
