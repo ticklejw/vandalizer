@@ -23,6 +23,7 @@ import { KnowledgeExplainer } from './KnowledgeExplainer'
 import { ExplainerPill } from './AutomationsPanel'
 import { ShareWithTeamDialog } from '../library/ShareWithTeamDialog'
 import { useToast } from '../../contexts/ToastContext'
+import { ShareLabel } from '../../lib/catalogLabels'
 import { useConfirm } from '../shared/useConfirm'
 import { SharedKBDeleteDialog, type SharedKBDeleteChoice } from '../shared/SharedKBDeleteDialog'
 import { OptimizedBadge, VerifiedBadge } from '../knowledge/KBTrustBadges'
@@ -630,7 +631,7 @@ export function KnowledgePanel() {
         border: '1px solid #3a3a3a', maxHeight: '80vh', overflowY: 'auto',
       }}>
         <div style={{ fontSize: 16, fontWeight: 600, color: '#fff', marginBottom: 4 }}>
-          Submit for Verification
+          <ShareLabel />
         </div>
         <div style={{ fontSize: 12, color: '#888', marginBottom: 16 }}>
           {verifyKB.title}
@@ -1162,7 +1163,7 @@ export function KnowledgePanel() {
                     }}
                   >
                     <Send size={13} />
-                    Submit for Verification
+                    <ShareLabel />
                   </button>
                 )
               )}

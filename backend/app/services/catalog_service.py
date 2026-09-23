@@ -1,4 +1,4 @@
-"""Verified-catalog version helpers used by the in-app upgrade feature."""
+"""Example-catalog version helpers used by the in-app upgrade feature."""
 
 import logging
 
@@ -49,7 +49,7 @@ async def notify_admins_of_catalog_update_if_new() -> None:
                 user_id=admin.user_id,
                 kind="catalog_upgrade_available",
                 title=f"Catalog update available: {bundled}",
-                body=f"Your verified catalog is at {applied}. Review and apply the update from Admin → Catalog.",
+                body=f"Your example catalog is at {applied}. Review and apply the update from Admin → Catalog.",
                 link="/admin?tab=catalog",
             )
         except Exception:

@@ -916,7 +916,7 @@ export function ExploreTab() {
               <div className="text-center py-20">
                 <ShieldCheck className="h-14 w-14 text-gray-200 mx-auto mb-4" />
                 <h3 className="text-base font-semibold text-gray-700 mb-1">
-                  {hasActiveFilters ? 'No matching items' : 'No verified items yet'}
+                  {hasActiveFilters ? 'No matching items' : 'Nothing in the catalog yet'}
                 </h3>
                 <p className="text-sm text-gray-500 max-w-sm mx-auto">
                   {hasActiveFilters

@@ -29,7 +29,7 @@ export function QualityContractBadge({ status, tier, lastValidatedAt, isStale, m
   const monitorLabel = monitored ? 'Monitored' : 'Unmonitored'
   const staleLabel = isStale && lastValidatedAt ? `Last checked ${relativeTime(lastValidatedAt)}` : ''
 
-  let label = `Verified`
+  let label = `Examined`
   if (tier) label += ` \u00b7 ${tierLabel}`
   if (asserted) {
     label += ` (asserted)`

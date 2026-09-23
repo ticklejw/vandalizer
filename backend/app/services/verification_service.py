@@ -1718,7 +1718,7 @@ async def _notify_examiners(req: VerificationRequest) -> None:
                 user_id=reviewer.user_id,
                 kind="verification_submitted",
                 title=f'New submission: "{item_name}"',
-                body=f"{submitter_display} submitted a {req.item_kind.replace('_', ' ')} for verification.",
+                body=f"{submitter_display} shared a {req.item_kind.replace('_', ' ')} for catalog review.",
                 link=f"/verification?request={req.uuid}",
                 item_kind=req.item_kind,
                 item_id=str(req.item_id),
@@ -1759,18 +1759,18 @@ async def _notify_submitter(
     status_config = {
         VerificationStatus.APPROVED.value: {
             "kind": "verification_approved",
-            "title": f'"{item_name}" has been approved',
-            "body": reviewer_notes or "Your submission has been verified and added to the catalog.",
+            "title": f'"{item_name}" is now in the catalog',
+            "body": reviewer_notes or "An examiner reviewed your submission and published it with its measured score.",
         },
         VerificationStatus.REJECTED.value: {
             "kind": "verification_rejected",
-            "title": f'"{item_name}" was not approved',
-            "body": reviewer_notes or "Your submission did not meet verification requirements.",
+            "title": f'"{item_name}" was declined',
+            "body": reviewer_notes or "The examiner decided not to publish this submission.",
         },
         VerificationStatus.RETURNED.value: {
             "kind": "verification_returned",
-            "title": f'"{item_name}" needs revision',
-            "body": reviewer_notes or "Your submission has been returned with feedback.",
+            "title": f'"{item_name}" was sent back',
+            "body": reviewer_notes or "The examiner sent your submission back with feedback.",
         },
         VerificationStatus.IN_REVIEW.value: {
             "kind": "verification_in_review",

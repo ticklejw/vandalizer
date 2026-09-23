@@ -728,7 +728,7 @@ export function KBExploreTab({ onAdopted }: KBExploreTabProps) {
               <div role="status" aria-live="polite" style={{ textAlign: 'center', padding: '80px 16px' }}>
                 <BookOpen size={48} style={{ color: '#404040', margin: '0 auto 14px' }} aria-hidden="true" />
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 4 }}>
-                  {hasActiveFilters ? 'No matching knowledge bases' : 'No verified knowledge bases yet'}
+                  {hasActiveFilters ? 'No matching knowledge bases' : 'No knowledge bases in the catalog yet'}
                 </h3>
                 <p style={{ fontSize: 13, color: C.textDim, maxWidth: 340, margin: '0 auto' }}>
                   {hasActiveFilters
