@@ -99,7 +99,7 @@ function keptKnowledgeBasesMessage(results: DeleteFileResult[]): string | null {
   for (const r of results) for (const kb of r.knowledge_bases_kept ?? []) kept.set(kb.uuid, kb.title)
   if (kept.size === 0) return null
   const titles = [...kept.values()].map(t => `"${t}"`).join(', ')
-  return `Still in ${kept.size === 1 ? 'knowledge base' : 'knowledge bases'} ${titles} — you don't have permission to remove files there; ask the owner.`
+  return `Still in ${kept.size === 1 ? 'knowledge base' : 'knowledge bases'} ${titles} — it couldn't be removed there (you may not manage ${kept.size === 1 ? 'it' : 'them'}). Remove it from the knowledge base itself, or ask its owner.`
 }
 
 // The delete confirmation names what it deletes; past this many, "and N more".

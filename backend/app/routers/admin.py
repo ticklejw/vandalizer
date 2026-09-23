@@ -3012,7 +3012,10 @@ async def get_readiness_ocr(user: User = Depends(get_current_user)) -> dict:
     was a support ticket about uploads six weeks later.
 
     Admin, not superadmin: reading a health verdict is not editing config, and
-    the row is already on a page admins can open.
+    the row is already on a page admins can open. So only the verdict row is
+    returned — the probe itself carries the endpoint URL (credentials can
+    live in it) and the service's raw reply, which are for the superadmin's
+    Test button.
     """
     await _require_admin(user)
 
@@ -3024,7 +3027,7 @@ async def get_readiness_ocr(user: User = Depends(get_current_user)) -> dict:
         (it for it in build_readiness(cfg, ocr_probe=probe)["items"] if it["key"] == "ocr"),
         None,
     )
-    return {"item": item, "probe": probe}
+    return {"item": item}
 
 
 class TestPromptRequest(BaseModel):
