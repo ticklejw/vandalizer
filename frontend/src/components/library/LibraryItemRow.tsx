@@ -133,7 +133,7 @@ export function LibraryItemRow({ item, scope, onPin, onFavorite, onClone, onShar
           {item.name}
           {item.verified && (
             <span
-              title="From the shared catalog — saved as a reference. Make a copy to edit."
+              title="Shared with everyone — saved as a reference. Make a copy to edit."
               style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
             >
               <ShieldCheck size={13} style={{ color: '#b45309' }} />
@@ -164,7 +164,7 @@ export function LibraryItemRow({ item, scope, onPin, onFavorite, onClone, onShar
         <div style={{ fontSize: 12, color: '#70757a', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>{kindLabel}</span>
           {item.verified && (
-            <span style={{ color: '#b45309', fontWeight: 500 }}>Examined</span>
+            <span style={{ color: '#b45309', fontWeight: 500 }}>Shared with everyone</span>
           )}
           {item.created_by && item.created_by.user_id !== user?.user_id && (
             <AuthorChip author={item.created_by} />

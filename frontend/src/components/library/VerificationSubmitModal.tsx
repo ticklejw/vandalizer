@@ -383,7 +383,7 @@ export function VerificationSubmitModal({ itemKind, itemId, itemTitle, onClose, 
                     Share without a validation run — ask the examiner to validate it
                   </span>
                   <span className="block text-[11px] leading-snug text-amber-800 mt-0.5">
-                    The examiner will run a validation to get a score before publishing, so review takes longer. Running Validate &amp; improve yourself first is quicker and puts your own score on the entry.
+                    The examiner will run a validation to get a score before accepting, so it takes longer. Running Validate &amp; improve yourself first is quicker and puts your own score on the entry.
                   </span>
                 </span>
               </label>

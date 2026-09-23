@@ -1,20 +1,15 @@
-import { useBranding } from '../contexts/BrandingContext'
-
 /**
- * What "submit for verification" actually does: share the item with the
- * people at this institution, via an examiner's review. Named for the
- * institution when the deployment is branded, since "Share with Vandalizer"
- * would name the software rather than the audience.
+ * What "submit for verification" actually does: ask to share the item with
+ * everyone here, via an examiner's check. One constant so every surface says
+ * the same thing.
  */
-export function shareLabel(b: { orgName: string; isCustomized: boolean }): string {
-  return b.isCustomized ? `Share with ${b.orgName}` : 'Share to catalog'
-}
+export const SHARE_LABEL = 'Share with everyone'
 
 export function useShareLabel(): string {
-  return shareLabel(useBranding())
+  return SHARE_LABEL
 }
 
 /** Inline text version for places that render children rather than take a string prop. */
 export function ShareLabel() {
-  return <>{useShareLabel()}</>
+  return <>{SHARE_LABEL}</>
 }

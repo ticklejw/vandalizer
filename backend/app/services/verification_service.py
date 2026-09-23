@@ -620,10 +620,15 @@ async def list_verified_items(
 
     name_map: dict[str, str] = {}
     creator_map: dict[tuple[str, str], str] = {}
+    # Bundled starter examples carry the seed marker the catalog seeder writes;
+    # the listing says so per item, since nobody *here* shared those.
+    starter_ids: set[str] = set()
     if wf_ids:
         wfs = await Workflow.find({"_id": {"$in": wf_ids}}).to_list()
         for wf in wfs:
             name_map[str(wf.id)] = wf.name
+            if (wf.resource_config or {}).get("seed_id"):
+                starter_ids.add(str(wf.id))
             creator_id = wf.created_by_user_id or wf.user_id
             if creator_id:
                 creator_map[(LibraryItemKind.WORKFLOW.value, str(wf.id))] = creator_id
@@ -633,12 +638,16 @@ async def list_verified_items(
         for ss in ssets:
             name_map[str(ss.id)] = ss.title
             ss_map[str(ss.id)] = ss
+            if (ss.extraction_config or {}).get("seed_id"):
+                starter_ids.add(str(ss.id))
             if ss.user_id:
                 creator_map[(LibraryItemKind.SEARCH_SET.value, str(ss.id))] = ss.user_id
     if kb_ids:
         kbs = await KnowledgeBase.find({"_id": {"$in": kb_ids}}).to_list()
         for kb in kbs:
             name_map[str(kb.id)] = kb.title
+            if (kb.resource_config or {}).get("seed_id"):
+                starter_ids.add(str(kb.id))
             if kb.user_id:
                 creator_map[(LibraryItemKind.KNOWLEDGE_BASE.value, str(kb.id))] = kb.user_id
 
@@ -766,6 +775,7 @@ async def list_verified_items(
             "test_case_count": meta.test_case_count if meta else 0,
             "consistency": meta.consistency if meta else None,
             "adoption_count": adoption_map.get((item.kind.value, item_id_str), 0),
+            "starter": item_id_str in starter_ids,
             # The catalog is where an unfamiliar user picks something to trust,
             # so a regression nobody has reviewed has to travel with the row.
             "regression_pending_review": bool(meta and meta.regression_pending_review),
@@ -1718,7 +1728,7 @@ async def _notify_examiners(req: VerificationRequest) -> None:
                 user_id=reviewer.user_id,
                 kind="verification_submitted",
                 title=f'New submission: "{item_name}"',
-                body=f"{submitter_display} shared a {req.item_kind.replace('_', ' ')} for catalog review.",
+                body=f"{submitter_display} asked to share a {req.item_kind.replace('_', ' ')} with everyone.",
                 link=f"/verification?request={req.uuid}",
                 item_kind=req.item_kind,
                 item_id=str(req.item_id),
@@ -1759,13 +1769,13 @@ async def _notify_submitter(
     status_config = {
         VerificationStatus.APPROVED.value: {
             "kind": "verification_approved",
-            "title": f'"{item_name}" is now in the catalog',
-            "body": reviewer_notes or "An examiner reviewed your submission and published it with its measured score.",
+            "title": f'"{item_name}" is now shared with everyone',
+            "body": reviewer_notes or "An examiner checked it over and shared it with everyone here, with its measured score.",
         },
         VerificationStatus.REJECTED.value: {
             "kind": "verification_rejected",
             "title": f'"{item_name}" was declined',
-            "body": reviewer_notes or "The examiner decided not to publish this submission.",
+            "body": reviewer_notes or "The examiner decided not to share this one.",
         },
         VerificationStatus.RETURNED.value: {
             "kind": "verification_returned",

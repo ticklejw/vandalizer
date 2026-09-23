@@ -488,7 +488,7 @@ def verification_submitted_email(
 ) -> tuple[str, str]:
     """Returns (subject, html_body) telling a reviewer a new submission is queued."""
     kind_label = item_kind.replace("_", " ")
-    subject = f'New catalog submission: "{item_name}"'
+    subject = f'New sharing request: "{item_name}"'
     # Link to the submission, not the queue. A reviewer clicking through
     # otherwise has to find the right row themselves, which is worst at exactly
     # this moment — they have the least context about which item the mail was
@@ -566,14 +566,14 @@ def verification_status_email(
 ) -> tuple[str, str]:
     """Returns (subject, html_body) for a catalog review status change."""
     status_labels = {
-        "approved": ("Published", "An examiner reviewed your submission and published it to the catalog with its measured score."),
-        "rejected": ("Declined", "The examiner decided not to publish this submission."),
+        "approved": ("Accepted", "An examiner checked it over and shared it with everyone here, with its measured score."),
+        "rejected": ("Declined", "The examiner decided not to share this one."),
         "returned": ("Sent back", "The examiner sent your submission back with feedback."),
         "in_review": ("Under Review", "An examiner has started reviewing your submission."),
     }
     label, default_body = status_labels.get(new_status, (new_status.title(), ""))
     body_text = reviewer_notes or default_body
-    subject = f'Catalog review: "{item_name}" - {label}'
+    subject = f'Sharing request: "{item_name}" - {label}'
 
     notes_block = ""
     if reviewer_notes:
