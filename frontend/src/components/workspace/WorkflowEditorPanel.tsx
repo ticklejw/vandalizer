@@ -788,7 +788,7 @@ export function WorkflowEditorPanel() {
                 <span
                   title={
                     (workflow as Workflow & { verified?: boolean }).verified
-                      ? 'Verified workflow — make a copy to edit'
+                      ? 'Shared with everyone — make a copy to edit'
                       : 'Shared with you — make a copy to edit'
                   }
                   onClick={() => { void handleMakeCopy() }}
@@ -8495,7 +8495,7 @@ function ValidateTab({
                       onClose={() => setShowSubmitDialog(false)}
                       onSubmitted={() => {
                         setSubmitLibraryResult('success')
-                        toast('Submitted for verification', 'success')
+                        toast('Sent to the examiners — you\'ll hear back when someone has looked', 'success')
                       }}
                     />
                   )}
