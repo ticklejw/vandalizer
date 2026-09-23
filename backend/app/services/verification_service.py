@@ -1,5 +1,6 @@
 """Verification queue service  - submit, review, approve, reject."""
 
+import copy
 import datetime
 import logging
 
@@ -545,6 +546,7 @@ def adoption_counts(
     library_rows: list,
     kb_refs: list,
     kb_uuid_to_id: dict[str, str],
+    creator_map: dict[tuple[str, str], str] | None = None,
 ) -> dict[tuple[str, str], int]:
     """Distinct people who adopted each catalog item, keyed (kind, item_id).
 
@@ -552,7 +554,8 @@ def adoption_counts(
     which writes a non-verified LibraryItem pointing at the same object; a
     knowledge base by a KnowledgeBaseReference. Counting distinct users
     rather than rows means re-adding, or moving a bookmark between personal
-    and team, does not inflate it.
+    and team, does not inflate it. The item's own author is not an adopter —
+    creating an item bookmarks it for them — nor is the system user.
     """
     adopters: dict[tuple[str, str], set[str]] = {}
     for row in library_rows:
@@ -564,7 +567,45 @@ def adoption_counts(
         kb_id = kb_uuid_to_id.get(ref.source_kb_uuid)
         if kb_id:
             adopters.setdefault((LibraryItemKind.KNOWLEDGE_BASE.value, kb_id), set()).add(ref.user_id)
+    creators = creator_map or {}
+    for key, users in adopters.items():
+        users.discard(creators.get(key))
+        users.discard("system")
     return {key: len(users) for key, users in adopters.items()}
+
+
+# What a validation run writes onto VerifiedItemMetadata (quality_service.update_quality_metadata).
+_MEASURED_FIELDS = (
+    "quality_score", "quality_tier", "quality_grade", "last_validated_at",
+    "validation_run_count", "test_case_count", "consistency",
+)
+
+
+def _aware_dt(value):
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=datetime.timezone.utc)
+
+
+def with_measured_quality(meta, measured):
+    """The catalog row, carrying the newer validation result when there is one.
+
+    Extraction and KB validation runs are recorded under the item's uuid, so
+    their results land on a uuid-keyed metadata row, while the catalog's row
+    (display name, description, org visibility) is keyed by the ObjectId.
+    Reading only the ObjectId row dropped every extraction and KB result —
+    score, tier, case count and consistency never reached Explore.
+    """
+    if measured is None or measured is meta or measured.last_validated_at is None:
+        return meta
+    if meta is None:
+        return measured
+    if meta.last_validated_at and _aware_dt(meta.last_validated_at) >= _aware_dt(measured.last_validated_at):
+        return meta
+    merged = copy.copy(meta)
+    for field in _MEASURED_FIELDS:
+        setattr(merged, field, getattr(measured, field, None))
+    return merged
 
 
 def _quality_sort_key(entry: dict) -> tuple:
@@ -691,7 +732,7 @@ async def list_verified_items(
     # workflows/extractions are non-verified LibraryItems on the same object;
     # KB adoptions are references keyed by the KB's uuid.
     adoption_rows = (
-        await LibraryItem.find({"item_id": {"$in": all_object_ids}, "verified": False}).to_list()
+        await LibraryItem.find({"item_id": {"$in": all_object_ids}, "verified": {"$ne": True}}).to_list()
         if all_object_ids else []
     )
     kb_uuid_to_id = {kb.uuid: kb_id for kb_id, kb in kb_map.items()}
@@ -699,7 +740,7 @@ async def list_verified_items(
         await KnowledgeBaseReference.find({"source_kb_uuid": {"$in": list(kb_uuid_to_id)}}).to_list()
         if kb_uuid_to_id else []
     )
-    adoption_map = adoption_counts(adoption_rows, kb_refs, kb_uuid_to_id)
+    adoption_map = adoption_counts(adoption_rows, kb_refs, kb_uuid_to_id, creator_map)
 
     # --- Build result entries (applying search and org filters) ---
     search_lower = search.lower() if search else None
@@ -708,6 +749,13 @@ async def list_verified_items(
         item_id_str = str(item.item_id)
         name = name_map.get(item_id_str, "Unknown")
         meta = meta_map.get((item.kind.value, item_id_str))
+        underlying_obj = (
+            ss_map.get(item_id_str) if item.kind == LibraryItemKind.SEARCH_SET
+            else kb_map.get(item_id_str) if item.kind == LibraryItemKind.KNOWLEDGE_BASE
+            else None
+        )
+        if underlying_obj is not None and getattr(underlying_obj, "uuid", None):
+            meta = with_measured_quality(meta, meta_map.get((item.kind.value, underlying_obj.uuid)))
 
         # Search: match against name, display_name, description, and tags
         if search_lower:
