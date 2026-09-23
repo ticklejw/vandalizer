@@ -36,9 +36,10 @@ def _run(surface="workflow", *, status="completed", shadow=False, **fields):
     return SimpleNamespace(**base)
 
 
-async def _emit(surface, run, **kw):
+async def _emit(surface, run, *, owner="item-owner", **kw):
     create = AsyncMock()
-    with patch("app.services.notification_service.create_notification", create):
+    with patch("app.services.notification_service.create_notification", create), \
+         patch.object(on, "_item_info", AsyncMock(return_value=("Award review", owner))):
         await on.notify_run_terminal(surface, run, item_name="Award review", **kw)
     return create
 
@@ -47,10 +48,11 @@ class TestShadowRuns:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("surface", ["kb", "extraction", "workflow"])
     async def test_candidate_notifies_owner_with_link_to_tuning(self, surface):
-        create = await _emit(surface, _run(surface, shadow=True))
+        # The quality sweep starts shadow runs as "system"; the owner hears.
+        create = await _emit(surface, _run(surface, shadow=True, user_id="system"))
         create.assert_awaited_once()
         kw = create.await_args.kwargs
-        assert kw["user_id"] == "owner"
+        assert kw["user_id"] == "item-owner"
         assert kw["kind"] == "tuning_suggestion"
         assert kw["link"] == "/tuning"
         assert kw["title"] == "Tuning suggestion: Award review"
@@ -140,3 +142,25 @@ class TestReapers:
         assert run.status == "failed"
         notify.assert_awaited_once()
         assert notify.await_args.args[1] is run
+
+
+class TestRecipient:
+    @pytest.mark.asyncio
+    async def test_a_feedback_triggered_shadow_run_goes_to_the_owner_not_the_chat_user(self):
+        create = await _emit("kb", _run("kb", shadow=True, user_id="chat-user"))
+        assert create.await_args.kwargs["user_id"] == "item-owner"
+
+    @pytest.mark.asyncio
+    async def test_a_run_someone_started_goes_to_them(self):
+        create = await _emit("workflow", _run(user_id="launcher"))
+        assert create.await_args.kwargs["user_id"] == "launcher"
+
+    @pytest.mark.asyncio
+    async def test_an_ownerless_shadow_run_notifies_nobody(self):
+        create = await _emit("workflow", _run(shadow=True, user_id="system"), owner=None)
+        create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_system_owned_item_notifies_nobody(self):
+        create = await _emit("workflow", _run(shadow=True), owner="system")
+        create.assert_not_awaited()

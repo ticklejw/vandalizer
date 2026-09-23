@@ -56,23 +56,24 @@ def _item_link(surface: Surface, item_id: str) -> str:
     return f"/?workflow={item_id}"
 
 
-async def _item_name(surface: Surface, item_id: str) -> str | None:
+async def _item_info(surface: Surface, item_id: str) -> tuple[str | None, str | None]:
+    """``(name, owner_user_id)`` of the tuned item; ``(None, None)`` if it is gone."""
     try:
         if surface == "kb":
             from app.models.knowledge import KnowledgeBase
             item = await KnowledgeBase.find_one(KnowledgeBase.uuid == item_id)
-            return item.title if item else None
+            return (item.title, item.user_id) if item else (None, None)
         if surface == "extraction":
             from app.models.search_set import SearchSet
             item = await SearchSet.find_one(SearchSet.uuid == item_id)
-            return item.title if item else None
+            return (item.title, item.user_id) if item else (None, None)
         from beanie import PydanticObjectId
 
         from app.models.workflow import Workflow
         item = await Workflow.get(PydanticObjectId(item_id))
-        return item.name if item else None
+        return (item.name, item.user_id) if item else (None, None)
     except Exception:
-        return None
+        return None, None
 
 
 def _is_shadow(run_doc: Any) -> bool:
@@ -109,8 +110,7 @@ async def notify_run_terminal(
     """
     try:
         status = getattr(run_doc, "status", None)
-        user_id = getattr(run_doc, "user_id", None)
-        if not user_id or status not in ("completed", "failed"):
+        if status not in ("completed", "failed"):
             return
         shadow = _is_shadow(run_doc)
         suggestion = status == "completed" and not applied and _has_suggestion(run_doc)
@@ -119,7 +119,15 @@ async def notify_run_terminal(
 
         item_kind, noun = _SURFACE_LABELS[surface]
         item_id = _item_id(surface, run_doc)
-        name = item_name or await _item_name(surface, item_id) or noun
+        looked_up_name, owner = await _item_info(surface, item_id)
+        name = item_name or looked_up_name or noun
+        # A shadow run's user_id is whoever tripped the signal — "system" for
+        # the quality sweep, the chat user behind a thumbs-down — not someone
+        # who can act on it. The item's owner can; they get it. A run a
+        # person started goes to that person.
+        user_id = owner if shadow else getattr(run_doc, "user_id", None)
+        if not user_id or user_id == "system":
+            return
         # A shadow run's only home is the inbox; a run the user started
         # belongs to the item's own panel, which restores it.
         link = TUNING_PAGE if shadow else _item_link(surface, item_id)
