@@ -426,7 +426,7 @@ export function KBExploreTab({ onAdopted }: KBExploreTabProps) {
                       Knowledge bases ready to chat with — checked, scored, and free to copy
                     </p>
                     <p style={{ fontSize: 12, color: C.textFaint, margin: '4px 0 0' }}>
-                      Built one that works for you? Share it from My KBs — it doesn\'t need to be finished.
+                      Built one that works for you? Share it from My KBs — it doesn't need to be finished.
                     </p>
                   </div>
                 </div>

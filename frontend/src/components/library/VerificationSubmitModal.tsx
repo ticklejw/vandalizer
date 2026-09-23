@@ -154,8 +154,12 @@ export function VerificationSubmitModal({ itemKind, itemId, itemTitle, onClose, 
           {STEPS.map((s, i) => (
             <div key={s.key} className="flex items-center gap-1">
               <button
+                type="button"
+                // Past the first step only once a door is chosen: jumping to
+                // Review with no intent would submit as "everyone" unasked.
+                disabled={intent === null && s.key !== 'intent'}
                 onClick={() => setStep(s.key)}
-                className={`text-xs font-medium px-2 py-1 rounded ${
+                className={`text-xs font-medium px-2 py-1 rounded disabled:opacity-40 disabled:cursor-not-allowed ${
                   step === s.key
                     ? 'bg-gray-900 text-white'
                     : i < stepIndex
@@ -180,7 +184,7 @@ export function VerificationSubmitModal({ itemKind, itemId, itemTitle, onClose, 
           {step === 'intent' && (
             <div className="space-y-3">
               <p className="text-sm text-gray-700">
-                Sharing puts this {kindLabel.toLowerCase()} where colleagues can copy it. It doesn\'t need to be finished, and the score it carries can be low — it just has to be useful to someone and honest about what it does.
+                Sharing puts this {kindLabel.toLowerCase()} where colleagues can copy it. It doesn't need to be finished, and the score it carries can be low — it just has to be useful to someone and honest about what it does.
               </p>
               <div className="grid gap-2">
                 {onShareWithTeam && (
@@ -217,7 +221,7 @@ export function VerificationSubmitModal({ itemKind, itemId, itemTitle, onClose, 
                   <Eye className="h-5 w-5 mt-0.5 text-blue-600 shrink-0" aria-hidden="true" />
                   <span>
                     <span className="block text-sm font-semibold text-gray-900">Get a second pair of eyes</span>
-                    <span className="block text-xs text-gray-600 mt-0.5">Ask an examiner to look at it and run a validation for you. Takes a little longer; you\'ll get a score and notes back.</span>
+                    <span className="block text-xs text-gray-600 mt-0.5">Ask an examiner to look at it and run a validation for you. Takes a little longer; you'll get a score and notes back.</span>
                   </span>
                 </button>
               </div>
