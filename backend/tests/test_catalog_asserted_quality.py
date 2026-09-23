@@ -13,6 +13,10 @@ def _existing_meta(pinned_by=None, baseline=None):
     m = MagicMock()
     m.official_baseline = baseline
     m.official_baseline_pinned_by_user_id = pinned_by
+    # A real row's quality fields default to None; a bare MagicMock attribute
+    # would read as a measured score.
+    m.quality_score = None
+    m.quality_grade = None
     m.save = AsyncMock()
     return m
 
@@ -112,3 +116,42 @@ async def test_seed_normalizes_a_legacy_tier_passed_by_an_old_seed_file():
         MockVM.find_one = _find_one_returning(meta)
         await upsert_verified_metadata("workflow", "id-1", "Name", "desc", quality_tier="gold")
     assert meta.quality_tier == "excellent"
+
+
+@pytest.mark.asyncio
+async def test_an_asserted_seed_tier_never_overrides_a_tier_measured_here():
+    """A seed asserting "excellent" must not relabel a row this install
+    validated at 62 — it would display as a measured "Excellent (62%)"."""
+    meta = _existing_meta()
+    meta.quality_tier = "fair"
+    meta.quality_score = 62.0
+    meta.quality_grade = "D"
+    with patch("scripts.seed_catalog.VerifiedItemMetadata") as MockVM:
+        MockVM.find_one = _find_one_returning(meta)
+        await upsert_verified_metadata(
+            "workflow", "id-1", "Name", "desc", quality_tier="excellent", quality_grade="A",
+        )
+    assert (meta.quality_tier, meta.quality_score, meta.quality_grade) == ("fair", 62.0, "D")
+
+
+@pytest.mark.asyncio
+async def test_a_seed_shipping_a_measured_score_still_updates_the_tier():
+    meta = _existing_meta()
+    meta.quality_tier = "fair"
+    meta.quality_score = 62.0
+    with patch("scripts.seed_catalog.VerifiedItemMetadata") as MockVM:
+        MockVM.find_one = _find_one_returning(meta)
+        await upsert_verified_metadata(
+            "workflow", "id-1", "Name", "desc", quality_tier="excellent", quality_score=91.0,
+        )
+    assert (meta.quality_tier, meta.quality_score) == ("excellent", 91.0)
+
+
+def test_catalog_reads_map_legacy_tiers():
+    """Rows the seeds no longer cover keep their old tier names forever; every
+    read maps them so filters, the spotlight and sort still see them."""
+    from app.services.verification_service import normalize_tier as svc_normalize
+
+    assert svc_normalize("gold") == "excellent"
+    assert svc_normalize("bronze") == "fair"
+    assert svc_normalize("good") == "good"
