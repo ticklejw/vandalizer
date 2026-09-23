@@ -20,11 +20,19 @@ def _source(uuid, kb_uuid):
     return s
 
 
-def _kb(uuid, title):
+def _kb(uuid, title, team_id=None):
     kb = MagicMock()
     kb.uuid = uuid
     kb.title = title
+    kb.team_id = team_id
     return kb
+
+
+def _access(*teams):
+    return patch(
+        "app.services.access_control.get_team_access_context",
+        AsyncMock(return_value=MagicMock(team_uuids=set(teams), team_object_ids=set())),
+    )
 
 
 def _find_returning(items):
@@ -50,6 +58,7 @@ class TestRemoveDocumentFromKnowledgeBases:
 
         with patch.object(svc.KnowledgeBaseSource, "find", return_value=_find_returning(sources)), \
              patch("app.services.organization_service.get_user_org_ancestry", AsyncMock(return_value=[])), \
+             _access(), \
              patch.object(svc, "get_knowledge_base", side_effect=get_kb), \
              patch.object(svc, "remove_source", AsyncMock(return_value=True)) as remove:
             removed, kept = await svc.remove_document_from_knowledge_bases("doc-1", MagicMock())
@@ -58,6 +67,8 @@ class TestRemoveDocumentFromKnowledgeBases:
         # The view-only KB is named; the invisible one is not.
         assert kept == [{"uuid": "kb-view", "title": "Verified NSF"}]
         assert [c.args for c in remove.await_args_list] == [(own, "s1"), (own, "s2")]
+        # Chunks must actually go, or the KB is reported as still holding it.
+        assert all(c.kwargs == {"strict": True} for c in remove.await_args_list)
 
     @pytest.mark.asyncio
     async def test_one_failing_kb_does_not_stop_the_others(self):
@@ -66,13 +77,14 @@ class TestRemoveDocumentFromKnowledgeBases:
         sources = [_source("s1", "kb-a"), _source("s2", "kb-b")]
         kbs = {"kb-a": _kb("kb-a", "A"), "kb-b": _kb("kb-b", "B")}
 
-        async def remove(kb, source_uuid):
+        async def remove(kb, source_uuid, strict=False):
             if kb.uuid == "kb-a":
                 raise RuntimeError("chroma down")
             return True
 
         with patch.object(svc.KnowledgeBaseSource, "find", return_value=_find_returning(sources)), \
              patch("app.services.organization_service.get_user_org_ancestry", AsyncMock(return_value=[])), \
+             _access(), \
              patch.object(svc, "get_knowledge_base", AsyncMock(side_effect=lambda uuid, *a, **k: kbs[uuid])), \
              patch.object(svc, "remove_source", side_effect=remove):
             removed, kept = await svc.remove_document_from_knowledge_bases("doc-1", MagicMock())
@@ -88,6 +100,42 @@ class TestRemoveDocumentFromKnowledgeBases:
              patch.object(svc, "remove_source", AsyncMock()) as remove:
             assert await svc.remove_document_from_knowledge_bases("doc-1", MagicMock()) == ([], [])
         remove.assert_not_awaited()
+
+
+class TestTenantScope:
+    @pytest.mark.asyncio
+    async def test_an_admin_never_reaches_another_teams_kb(self):
+        """The dialog lists only the caller's tenants; an admin can manage any
+        KB, but the delete must stay within what the dialog showed."""
+        from app.services import knowledge_service as svc
+
+        sources = [_source("s1", "kb-mine"), _source("s2", "kb-theirs")]
+        kbs = {"kb-mine": _kb("kb-mine", "Mine", team_id="team-a"),
+               "kb-theirs": _kb("kb-theirs", "Other team", team_id="team-z")}
+        with patch.object(svc.KnowledgeBaseSource, "find", return_value=_find_returning(sources)), \
+             patch("app.services.organization_service.get_user_org_ancestry", AsyncMock(return_value=[])), \
+             _access("team-a"), \
+             patch.object(svc, "get_knowledge_base", AsyncMock(side_effect=lambda uuid, *a, **k: kbs[uuid])), \
+             patch.object(svc, "remove_source", AsyncMock(return_value=True)) as remove:
+            removed, kept = await svc.remove_document_from_knowledge_bases("doc-1", MagicMock())
+        assert removed == [{"uuid": "kb-mine", "title": "Mine"}]
+        assert kept == []  # the other team's KB is neither touched nor named
+        assert [c.args[0] for c in remove.await_args_list] == [kbs["kb-mine"]]
+
+    @pytest.mark.asyncio
+    async def test_strict_remove_keeps_the_row_when_chunks_cannot_be_deleted(self):
+        from app.services import knowledge_service as svc
+
+        source = MagicMock(uuid="s1")
+        source.delete = AsyncMock()
+        dm = MagicMock()
+        dm.delete_kb_source.side_effect = RuntimeError("chroma down")
+        with patch.object(svc, "KnowledgeBaseSource", MagicMock(find_one=AsyncMock(return_value=source))), \
+             patch.object(svc, "_get_dm", return_value=dm), \
+             patch.object(svc, "recalculate_stats", AsyncMock()):
+            with pytest.raises(RuntimeError):
+                await svc.remove_source(_kb("kb-1", "KB"), "s1", strict=True)
+        source.delete.assert_not_awaited()
 
 
 class TestDeleteRoute:
