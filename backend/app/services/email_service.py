@@ -511,7 +511,7 @@ def verification_submitted_email(
     <div class="container"><div class="card">
       <div class="logo">Vandalizer</div>
       <h1>New submission awaiting review</h1>
-      <p>Hi {reviewer_name}, <strong style="color:#fff">{submitter_name}</strong> submitted the {kind_label} <span class="highlight">{item_name}</span> for verification.</p>
+      <p>Hi {reviewer_name}, <strong style="color:#fff">{submitter_name}</strong> asked to share the {kind_label} <span class="highlight">{item_name}</span> with everyone.</p>
       {summary_block}
       <p style="margin-top:24px"><a class="btn" href="{queue_link}">{button_label}</a></p>
       <div class="footer">Vandalizer</div>

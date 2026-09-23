@@ -671,13 +671,15 @@ async def list_verified_items(
     name_map: dict[str, str] = {}
     creator_map: dict[tuple[str, str], str] = {}
     # Bundled starter examples carry the seed marker the catalog seeder writes;
-    # the listing says so per item, since nobody *here* shared those.
+    # the listing says so per item, since nobody *here* shared those. Copies
+    # ("Add to my library") carry the marker too, so the system owner is what
+    # makes one a starter — a colleague's edited copy is their own share.
     starter_ids: set[str] = set()
     if wf_ids:
         wfs = await Workflow.find({"_id": {"$in": wf_ids}}).to_list()
         for wf in wfs:
             name_map[str(wf.id)] = wf.name
-            if (wf.resource_config or {}).get("seed_id"):
+            if (wf.resource_config or {}).get("seed_id") and wf.user_id == "system":
                 starter_ids.add(str(wf.id))
             creator_id = wf.created_by_user_id or wf.user_id
             if creator_id:
@@ -688,7 +690,7 @@ async def list_verified_items(
         for ss in ssets:
             name_map[str(ss.id)] = ss.title
             ss_map[str(ss.id)] = ss
-            if (ss.extraction_config or {}).get("seed_id"):
+            if (ss.extraction_config or {}).get("seed_id") and ss.user_id == "system":
                 starter_ids.add(str(ss.id))
             if ss.user_id:
                 creator_map[(LibraryItemKind.SEARCH_SET.value, str(ss.id))] = ss.user_id
@@ -696,7 +698,7 @@ async def list_verified_items(
         kbs = await KnowledgeBase.find({"_id": {"$in": kb_ids}}).to_list()
         for kb in kbs:
             name_map[str(kb.id)] = kb.title
-            if (kb.resource_config or {}).get("seed_id"):
+            if (kb.resource_config or {}).get("seed_id") and kb.user_id == "system":
                 starter_ids.add(str(kb.id))
             if kb.user_id:
                 creator_map[(LibraryItemKind.KNOWLEDGE_BASE.value, str(kb.id))] = kb.user_id
