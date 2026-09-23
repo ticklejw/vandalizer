@@ -1976,6 +1976,9 @@ async def cancel_workflow_optimization(
     )
     if not run:
         raise HTTPException(status_code=404, detail="Optimization run not found")
+    # A reviewer with validate access may stop their own run, not the owner's.
+    if run.user_id != user.user_id and not await get_authorized_workflow(workflow_id, user, manage=True):
+        raise HTTPException(status_code=403, detail="You can only cancel optimization runs you started")
     if run.status not in ("queued", "running"):
         return {"ok": True, "status": run.status, "note": "not running"}
     run.cancel_requested = True
