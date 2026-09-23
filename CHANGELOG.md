@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **A tuning suggestion or a failed tuning run now reaches the owner of the item, through the notification bell.** The optimizer's automatic ("shadow") runs are started by quality signals rather than by a person, so when one found better settings or failed, the only place it showed was the Tuning suggestions page, which nothing in the app links to for anyone but an admin. On production, 50 suggestions had piled up unapplied, and 50 failed runs on dev went unnoticed (support ticket). The owner now gets a bell notification, with no new menu entry for the many users who never own a tuned item. An automatic run notifies only when it leaves something to act on: "Tuning suggestion: <item>", with the score before and after, linking to the Tuning suggestions page to review, apply or dismiss it. It stays quiet when it found nothing measurably better. Any tuning run that fails notifies as a warning with its error, including a run whose worker died and was cleaned up later, which used to fail silently. A run the user started themselves notifies when it completes or fails, linking back to the workflow, extraction or knowledge base. Workflow and extraction tuning runs never notified before; knowledge-base runs did, and now follow the same rules, so a cancellation the user made themselves no longer produces a bell entry. Repeats for the same item fold into one unread entry ("3 tuning suggestions: …") rather than stacking up.
+
 ## [v4.13.0] - 2026-09-22
 
 ### Added
