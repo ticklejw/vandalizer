@@ -726,9 +726,9 @@ export const MODULES: ModuleDefinition[] = [
     number: 10,
     title: 'Collaboration & Governance',
     subtitle: 'Share and Standardize',
-    description: 'The final module before your Vandal Workflow Architect certification. Demonstrate that you can organize your work, share it with your institution through an examiner\'s review, and read what a catalog entry\'s score, consistency and adoption actually tell you. Complete this and you earn your VWA credential.',
+    description: 'The final module before your Vandal Workflow Architect certification. Demonstrate that you can organize your work, share it with everyone through an examiner\'s check, and read what a shared entry\'s score, consistency and adoption actually tell you. Complete this and you earn your VWA credential.',
     objectives: [
-      'Share a workflow for catalog review',
+      'Share a workflow with everyone',
       'Use workflows across personal and team contexts',
       'No new documents needed - uses workflows you have already built',
     ],
@@ -741,21 +741,21 @@ export const MODULES: ModuleDefinition[] = [
       {
         title: 'Organizing for reuse',
         objective: 'After this lesson, you\'ll understand the three tiers of workflow organization and when to use each.',
-        content: 'As your team builds more workflows, organization becomes critical. Use personal work for drafting, then move the workflows your team should reuse into shared team libraries, and share the ones the whole institution could use to the catalog.\n\nThink about organization in terms of ownership and audience:\n\u2022 **Personal work** \u2014 early drafts, experiments, and one-off variations.\n\u2022 **Team libraries** \u2014 shared workflows your group actively maintains.\n\u2022 **Catalog** \u2014 workflows an examiner has reviewed and published for everyone at your institution, with a measured score attached.',
+        content: 'As your team builds more workflows, organization becomes critical. Use personal work for drafting, then move the workflows your team should reuse into shared team libraries, and share the ones the whole institution could use with everyone.\n\nThink about organization in terms of ownership and audience:\n\u2022 **Personal work** \u2014 early drafts, experiments, and one-off variations.\n\u2022 **Team libraries** \u2014 shared workflows your group actively maintains.\n\u2022 **Everyone** \u2014 workflows an examiner has checked over and shared with everyone at your institution, with a measured score attached.',
         variant: 'concept',
       },
       {
-        title: 'Sharing to the catalog',
-        objective: 'After this lesson, you\'ll know what an "Examined" catalog entry does and doesn\'t promise, and how to read one.',
-        content: 'Sharing to the catalog has two halves. You share a workflow; an examiner reviews it and publishes it. The **Examined** badge on the catalog entry then tells a colleague four measured things:\n\n1. **Score** \u2014 how it did on its validation cases, and how many cases that was.\n2. **Consistency** \u2014 whether it gave the same answers across repeated runs.\n3. **Adoption** \u2014 how many people already use it.\n4. **When it was last checked** \u2014 monitoring re-runs the baseline and flags a drop.\n\nWhat it does *not* claim: that the output format fits your team, or that it is "production-ready" for your process. Those are your calls to make from the numbers \u2014 which is why the numbers, not the badge, are the point. A workflow at 84% that four colleagues rely on is a good candidate; a perfect score nobody uses tells you less.\n\nSharing is the part you control, and it\'s what completes this module. Examiner review happens on its own schedule \u2014 you\'ll get a notification when it lands.',
+        title: 'Sharing with everyone',
+        objective: 'After this lesson, you\'ll know what a "Checked" shared entry does and doesn\'t promise, and how to read one.',
+        content: 'Sharing with everyone has two halves. You ask to share a workflow; an examiner checks it over and accepts it. The **Checked** badge on the shared entry then tells a colleague four measured things:\n\n1. **Score** \u2014 how it did on its validation cases, and how many cases that was.\n2. **Consistency** \u2014 whether it gave the same answers across repeated runs.\n3. **Adoption** \u2014 how many people already use it.\n4. **When it was last checked** \u2014 monitoring re-runs the baseline and flags a drop.\n\nWhat it does *not* claim: that the output format fits your team, or that it is "production-ready" for your process. Those are your calls to make from the numbers \u2014 which is why the numbers, not the badge, are the point. A workflow at 84% that four colleagues rely on is a good candidate; a perfect score nobody uses tells you less.\n\nSharing is the part you control, and it\'s what completes this module. Examiner review happens on its own schedule \u2014 you\'ll get a notification when it lands.',
         variant: 'concept',
         knowledgeCheck: {
-          question: 'What does an "Examined" catalog entry actually tell you?',
+          question: 'What does a "Checked" shared entry actually tell you?',
           options: [
-            { text: 'The workflow is locked and cannot be edited by other team members', correct: false, explanation: 'Examined is not a lock. Anyone can copy a catalog item and edit their copy.' },
-            { text: 'An examiner reviewed it, and its score, consistency and adoption are shown so you can judge fit yourself', correct: true, explanation: 'Correct. Examined means looked at and measured, not endorsed for every use. The numbers on the entry are what you decide from.' },
+            { text: 'The workflow is locked and cannot be edited by other team members', correct: false, explanation: 'Checked is not a lock. Anyone can copy a shared item and edit their copy.' },
+            { text: 'An examiner looked it over, and its score, consistency and adoption are shown so you can judge fit yourself', correct: true, explanation: 'Correct. Checked means someone looked at it and it was measured, not endorsed for every use. The numbers on the entry are what you decide from.' },
             { text: 'The workflow was created by an admin-level user', correct: false, explanation: 'Any team member can submit a workflow for verification. An examiner approves it based on the workflow\'s quality, not the creator\'s role.' },
-            { text: 'The workflow only uses LLM models approved by your institution', correct: false, explanation: 'Model approval is a separate concern. Examined is about the review and the measurements, not the model.' },
+            { text: 'The workflow only uses LLM models approved by your institution', correct: false, explanation: 'Model approval is a separate concern. Checked is about the look-over and the measurements, not the model.' },
           ],
         },
       },
@@ -771,7 +771,7 @@ export const MODULES: ModuleDefinition[] = [
       },
       {
         title: 'Building a culture of reuse',
-        content: 'The highest-performing teams draw on a catalog of examined workflows that cover common document types, then adapt and extend them as needed.\n\nBy completing this module, you\'ve demonstrated every skill in the Vandal Workflow Architect program: understanding AI, decomposing processes, designing pipelines, building extractions, chaining multi-step workflows, using advanced nodes, producing deliverables, validating quality, processing at scale, and governing shared workflows.\n\nYou\'re now a certified VWA \u2014 the person on your team who knows how to turn any document-heavy process into a reliable, AI-powered pipeline. That\'s a rare and valuable skill.',
+        content: 'The highest-performing teams draw on the pool of checked, shared workflows that cover common document types, then adapt and extend them as needed.\n\nBy completing this module, you\'ve demonstrated every skill in the Vandal Workflow Architect program: understanding AI, decomposing processes, designing pipelines, building extractions, chaining multi-step workflows, using advanced nodes, producing deliverables, validating quality, processing at scale, and governing shared workflows.\n\nYou\'re now a certified VWA \u2014 the person on your team who knows how to turn any document-heavy process into a reliable, AI-powered pipeline. That\'s a rare and valuable skill.',
         variant: 'insight',
         knowledgeCheck: {
           question: 'A colleague asks how to verify that budget totals are correct in a workflow. What\'s the right approach?',
@@ -790,7 +790,7 @@ export const MODULES: ModuleDefinition[] = [
       },
       {
         title: 'Glossary & Review',
-        content: 'Personal work \u2014 Workflows and resources that only you can see and edit. The right place for experiments, drafts, and one-off variations. Graduate your best work to the team context when it\'s ready to share.\n\nExamined \u2014 The badge on a catalog entry. You\'ve now shared a workflow for catalog review; once an examiner publishes it, the entry carries its score, how many cases that was measured on, its consistency across runs, and how many people use it. It says the item was looked at and measured \u2014 not that it fits every team\'s process. Not a technical lock.\n\nExport (.vandalizer.json) \u2014 A portable file containing your workflow\'s complete definition: steps, tasks, field configurations, prompts. It can be imported into any Vandalizer instance and is the standard format for cross-team sharing.\n\nTeam \u2014 A group of users who share access to team workflows, libraries, and folders. Members have roles: owner, admin, or member. Catalog workflows your team adopts become the standards you build on.',
+        content: 'Personal work \u2014 Workflows and resources that only you can see and edit. The right place for experiments, drafts, and one-off variations. Graduate your best work to the team context when it\'s ready to share.\n\nChecked \u2014 The badge on a shared entry. You\'ve now asked to share a workflow with everyone; once an examiner accepts it, the entry carries its score, how many cases that was measured on, its consistency across runs, and how many people use it. It says the item was looked at and measured \u2014 not that it fits every team\'s process. Not a technical lock.\n\nExport (.vandalizer.json) \u2014 A portable file containing your workflow\'s complete definition: steps, tasks, field configurations, prompts. It can be imported into any Vandalizer instance and is the standard format for cross-team sharing.\n\nTeam \u2014 A group of users who share access to team workflows, libraries, and folders. Members have roles: owner, admin, or member. Shared workflows your team adopts become the standards you build on.',
         variant: 'key-terms',
       },
     ],

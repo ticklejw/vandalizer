@@ -17,7 +17,7 @@ function statusBadge(status: VerificationStatus) {
     case 'in_review':
       return { label: 'In Review', className: 'bg-yellow-50 text-yellow-700 border-yellow-200' }
     case 'approved':
-      return { label: 'Published', className: 'bg-green-50 text-green-700 border-green-200' }
+      return { label: 'Accepted', className: 'bg-green-50 text-green-700 border-green-200' }
     case 'rejected':
       return { label: 'Declined', className: 'bg-red-50 text-red-700 border-red-200' }
     case 'returned':
@@ -192,7 +192,7 @@ export function VerificationQueue({ focusRequestUuid }: { focusRequestUuid?: str
             className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-gray-400"
           />
         </div>
-        <div role="group" aria-label="Catalog review views" className="flex items-center gap-2">
+        <div role="group" aria-label="Shared items views" className="flex items-center gap-2">
           <button
             type="button"
             aria-pressed={view === 'pending'}
@@ -203,7 +203,7 @@ export function VerificationQueue({ focusRequestUuid }: { focusRequestUuid?: str
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
-            Review Queue
+            Requests
           </button>
           <button
             type="button"
@@ -389,7 +389,7 @@ export function VerificationQueue({ focusRequestUuid }: { focusRequestUuid?: str
                               {(req.validation_snapshot || req.examiner_baseline_additions) ? (
                                 <div className="text-[10px] text-gray-500 inline-flex items-center gap-1">
                                   <Pin className="h-3 w-3" />
-                                  Publishing pins the {req.examiner_baseline_additions && req.validation_snapshot ? 'merged' : req.examiner_baseline_additions ? 'examiner-curated' : 'submitter\'s'} validation as the baseline monitoring compares against.
+                                  Accepting pins the {req.examiner_baseline_additions && req.validation_snapshot ? 'merged' : req.examiner_baseline_additions ? 'examiner-curated' : 'submitter\'s'} validation as the baseline monitoring compares against.
                                 </div>
                               ) : (
                                 <div className="text-[10px] text-gray-500 inline-flex items-center gap-1">
@@ -397,14 +397,14 @@ export function VerificationQueue({ focusRequestUuid }: { focusRequestUuid?: str
                                   No validation run yet — the entry won\'t be monitored for drift until one is pinned. You can pin one later from the Catalog tab.
                                 </div>
                               )}
-                              {/* Two real outcomes: publish it, or send it back with notes.
+                              {/* Two real outcomes: accept it, or send it back with notes.
                                   Declining outright is rare enough to sit below the row. */}
                               <div className="flex gap-1">
                                 <button
                                   onClick={() => handleAction(req.uuid, 'approved')}
                                   className="flex-1 px-2 py-1 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700"
                                 >
-                                  Publish
+                                  Accept
                                 </button>
                                 <button
                                   onClick={() => handleAction(req.uuid, 'returned')}
@@ -426,7 +426,7 @@ export function VerificationQueue({ focusRequestUuid }: { focusRequestUuid?: str
                                 type="button"
                                 onClick={() => handleAction(req.uuid, 'rejected')}
                                 className="self-start text-[11px] text-red-700 hover:underline"
-                                title="Close this submission without publishing it. Prefer Send back when a revision could get it there."
+                                title="Close this request without sharing it. Prefer Send back when a revision could get it there."
                               >
                                 Decline instead
                               </button>
